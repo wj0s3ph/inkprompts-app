@@ -1,0 +1,72 @@
+appId: com.inkprompts.journal
+productName: InkPrompts Journal
+copyright: Copyright © 2026 Chao Wang
+afterPack: build/after-pack.cjs
+directories:
+  buildResources: build
+  output: dist
+files:
+  - 'out/**'
+  - 'package.json'
+  - 'resources/**'
+  - 'node_modules/@electron-toolkit/utils/**'
+  - 'node_modules/write-file-atomic/**'
+  - 'node_modules/signal-exit/**'
+extraResources:
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: OPEN_SOURCE_NOTICES.md
+    to: OPEN_SOURCE_NOTICES.md
+  - from: ASSETS-LICENSE.md
+    to: ASSETS-LICENSE.md
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: node_modules/electron/LICENSE
+    to: ELECTRON_LICENSE.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: THIRD_PARTY_LICENSES.chromium.html
+win:
+  executableName: InkPrompts-Journal
+  icon: build/icon.ico
+  signExecutable: false
+  target:
+    - nsis
+nsis:
+  artifactName: InkPrompts-Journal-${version}-windows-${arch}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  identity: '-'
+  hardenedRuntime: false
+  notarize: false
+  minimumSystemVersion: '12.0'
+  extraResources:
+    - from: build/PrivacyInfo.xcprivacy
+      to: PrivacyInfo.xcprivacy
+  target:
+    - dmg
+    - zip
+  artifactName: InkPrompts-Journal-${version}-macos-${arch}.${ext}
+dmg:
+  artifactName: InkPrompts-Journal-${version}-macos-${arch}.${ext}
+linux:
+  executableName: inkprompts-journal
+  icon: build/icon.png
+  target:
+    - AppImage
+    - deb
+  maintainer: Chao Wang <hello@inkprompts.com>
+  category: Utility
+  synopsis: Private encrypted daily journal
+  artifactName: InkPrompts-Journal-${version}-linux-${arch}.${ext}
+appImage:
+  artifactName: InkPrompts-Journal-${version}-linux-${arch}.${ext}
+npmRebuild: false

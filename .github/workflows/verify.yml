@@ -1,0 +1,47 @@
+name: Verify desktop application
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run test:unit
+      - name: Build unpacked certificate-free application
+        run: npm run build:unpack
+
+      - name: Test packaged macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          INKPROMPTS_EXECUTABLE_PATH="$(find dist -path '*/InkPrompts Journal.app/Contents/MacOS/InkPrompts Journal' -type f -print -quit)" npm run test:e2e
+      - name: Test packaged Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:INKPROMPTS_EXECUTABLE_PATH = (Get-ChildItem dist -Recurse -Filter InkPrompts-Journal.exe | Select-Object -First 1).FullName
+          npm run test:e2e
+      - name: Test packaged Linux application
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          INKPROMPTS_EXECUTABLE_PATH="$(find dist -path '*/inkprompts-journal' -type f -print -quit)" xvfb-run -a npm run test:e2e

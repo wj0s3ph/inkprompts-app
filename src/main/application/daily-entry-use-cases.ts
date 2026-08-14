@@ -23,6 +23,7 @@ type DailyEntryUseCases = Pick<
   | 'bootstrap'
   | 'startWriting'
   | 'openDate'
+  | 'listJournalHistory'
   | 'search'
   | 'deleteEntry'
   | 'completeToday'
@@ -55,6 +56,23 @@ export function createDailyEntryUseCases(session: JournalSession): DailyEntryUse
       return buildView(state, session.clock.today(), 'journal', date)
     },
 
+    async listJournalHistory() {
+      const state = await session.getSettledState()
+      session.assertUnlocked(state)
+      return Object.values(state.entries)
+        .sort((left, right) => right.date.localeCompare(left.date))
+        .map((entry) => {
+          const plainText = richTextToPlainText(entry.content)
+          const snippet = historySnippet(plainText)
+          return {
+            date: entry.date,
+            title: entry.title || null,
+            snippet,
+            empty: !entry.title.trim() && !plainText
+          }
+        })
+    },
+
     async search(query: string) {
       if (typeof query !== 'string' || query.length > 200) {
         throw new JournalError('INVALID_INPUT', 'Use a shorter search phrase.')
@@ -66,17 +84,22 @@ export function createDailyEntryUseCases(session: JournalSession): DailyEntryUse
 
       return Object.values(state.entries)
         .filter((entry) => {
-          const searchable = normalizeForSearch(
-            `${entry.title}\n${richTextToPlainText(entry.content)}`
-          )
-          return searchable.includes(normalizedQuery)
+          const title = projectForSearch(entry.title).value
+          const body = projectForSearch(richTextToPlainText(entry.content)).value
+          return title.includes(normalizedQuery) || body.includes(normalizedQuery)
         })
         .sort((left, right) => right.date.localeCompare(left.date))
-        .map((entry) => ({
-          date: entry.date,
-          title: entry.title || null,
-          snippet: searchSnippet(richTextToPlainText(entry.content), normalizedQuery)
-        }))
+        .map((entry) => {
+          const title = entry.title || null
+          const snippet = searchSnippet(richTextToPlainText(entry.content), normalizedQuery)
+          return {
+            date: entry.date,
+            title,
+            snippet,
+            titleMatches: title ? findMatchRanges(title, normalizedQuery) : [],
+            snippetMatches: findMatchRanges(snippet, normalizedQuery)
+          }
+        })
     },
 
     async deleteEntry(date: string) {
@@ -209,23 +232,108 @@ export function createDailyEntryUseCases(session: JournalSession): DailyEntryUse
   }
 }
 
+function historySnippet(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  return compact.length <= 240 ? compact : `${compact.slice(0, 239)}…`
+}
+
 function normalizeForSearch(value: string): string {
-  return (
-    value
-      .normalize('NFKD')
-      .toLocaleLowerCase()
-      .match(/[\p{L}\p{N}]+/gu) ?? []
-  ).join(' ')
+  return projectForSearch(value).value
 }
 
 function searchSnippet(value: string, normalizedQuery: string): string {
   const compact = value.replace(/\s+/g, ' ').trim()
   if (compact.length <= 160) return compact
 
-  const folded = compact.normalize('NFKD').toLocaleLowerCase()
-  const queryToken = normalizedQuery.split(' ')[0]
-  const matchIndex = folded.indexOf(queryToken)
-  const start = matchIndex < 0 ? 0 : Math.max(0, matchIndex - 60)
+  const projection = projectForSearch(compact)
+  const matchIndex = projection.value.indexOf(normalizedQuery)
+  const sourceIndex = matchIndex < 0 ? 0 : projection.starts[matchIndex]
+  const start = Math.max(0, sourceIndex - 60)
   const end = Math.min(compact.length, start + 160)
   return `${start > 0 ? '…' : ''}${compact.slice(start, end)}${end < compact.length ? '…' : ''}`
+}
+
+interface SearchProjection {
+  value: string
+  starts: number[]
+  ends: number[]
+}
+
+function projectForSearch(source: string): SearchProjection {
+  const characters: string[] = []
+  const starts: number[] = []
+  const ends: number[] = []
+  let sourceIndex = 0
+  let separatorPending = false
+
+  const append = (character: string, start: number, end: number): void => {
+    characters.push(character)
+    starts.push(start)
+    ends.push(end)
+  }
+
+  for (const originalCharacter of source) {
+    const start = sourceIndex
+    sourceIndex += originalCharacter.length
+    for (const normalizedCharacter of originalCharacter.normalize('NFKD').toLocaleLowerCase()) {
+      if (/[\p{L}\p{N}]/u.test(normalizedCharacter)) {
+        if (separatorPending && characters.length > 0) append(' ', start, sourceIndex)
+        separatorPending = false
+        append(normalizedCharacter, start, sourceIndex)
+      } else if (!/\p{M}/u.test(normalizedCharacter) && characters.length > 0) {
+        separatorPending = true
+      }
+    }
+  }
+
+  return { value: characters.join(''), starts, ends }
+}
+
+function findMatchRanges(
+  source: string,
+  normalizedQuery: string
+): Array<{
+  start: number
+  end: number
+}> {
+  const projection = projectForSearch(source)
+  const ranges: Array<{ start: number; end: number }> = []
+  const seen = new Set<string>()
+
+  let offset = 0
+  while (offset <= projection.value.length - normalizedQuery.length) {
+    const matchIndex = projection.value.indexOf(normalizedQuery, offset)
+    if (matchIndex < 0) break
+    const start = projection.starts[matchIndex]
+    const projectedEnd = projection.ends[matchIndex + normalizedQuery.length - 1]
+    const end = extendOverCombiningMarks(source, projectedEnd)
+    const key = `${start}:${end}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      ranges.push({ start, end })
+    }
+    offset = matchIndex + normalizedQuery.length
+  }
+
+  return ranges
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+    .reduce<Array<{ start: number; end: number }>>((merged, range) => {
+      const previous = merged.at(-1)
+      if (previous && range.start < previous.end) {
+        previous.end = Math.max(previous.end, range.end)
+      } else {
+        merged.push({ ...range })
+      }
+      return merged
+    }, [])
+}
+
+function extendOverCombiningMarks(source: string, initialEnd: number): number {
+  let end = initialEnd
+  while (end < source.length) {
+    const nextCharacter = String.fromCodePoint(source.codePointAt(end)!)
+    if (!/\p{M}/u.test(nextCharacter)) break
+    end += nextCharacter.length
+  }
+  return end
 }

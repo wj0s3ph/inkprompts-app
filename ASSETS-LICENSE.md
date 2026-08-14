@@ -7,6 +7,7 @@ The following files are not licensed under the MPL-2.0:
 - `build/icon.icns`
 - `build/icon.ico`
 - `build/icon.png`
+- `.github/assets/inkprompts-journal-showcase.png`
 - `resources/icon.png`
 - `src/renderer/src/assets/hero-writing.svg`
 

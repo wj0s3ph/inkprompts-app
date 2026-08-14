@@ -124,7 +124,7 @@ export class JournalVaultRepository {
       const plaintext = decryptEnvelope(serialized, key)
       const sourceVersion = readSchemaVersion(plaintext)
       const state = parseVaultState(plaintext)
-      if (sourceVersion === 1) await this.save(state)
+      if (sourceVersion === 1 || needsIdleLockMigration(plaintext)) await this.save(state)
       return state
     } catch (error) {
       if (error instanceof JournalError) throw error
@@ -304,7 +304,7 @@ export function createEmptyVault(): JournalVaultState {
     schemaVersion: 2,
     onboarded: false,
     entries: {},
-    preferences: { theme: 'system', spellcheck: true },
+    preferences: { theme: 'system', spellcheck: true, idleLockMinutes: null },
     habitRecipe: null,
     habitRecipeInviteDismissed: false,
     habitRecipeReviewAsked: false,
@@ -334,10 +334,27 @@ export function parseVaultState(serialized: string): JournalVaultState {
   }
   if (typeof state.entries !== 'object' || Array.isArray(state.entries)) throw vaultCorruptError()
 
-  const preferences = state.preferences ?? { theme: 'system', spellcheck: true }
+  const pinLock = state.pinLock ?? null
+  if (pinLock) assertPinLock(pinLock)
+  const storedPreferences = (state.preferences ?? {
+    theme: 'system',
+    spellcheck: true
+  }) as Partial<JournalPreferences>
+  const preferences: JournalPreferences = {
+    theme: storedPreferences.theme as JournalPreferences['theme'],
+    spellcheck: storedPreferences.spellcheck as boolean,
+    idleLockMinutes: Object.hasOwn(storedPreferences, 'idleLockMinutes')
+      ? (storedPreferences.idleLockMinutes as JournalPreferences['idleLockMinutes'])
+      : pinLock
+        ? 15
+        : null
+  }
   if (
     !['system', 'light', 'dark'].includes(preferences.theme) ||
-    typeof preferences.spellcheck !== 'boolean'
+    typeof preferences.spellcheck !== 'boolean' ||
+    (pinLock
+      ? !['off', 5, 15, 30, 60].includes(preferences.idleLockMinutes as string | number)
+      : preferences.idleLockMinutes !== null)
   ) {
     throw vaultCorruptError()
   }
@@ -346,7 +363,6 @@ export function parseVaultState(serialized: string): JournalVaultState {
   if (habitRecipe) assertHabitRecipe(habitRecipe)
   const habitRecipeInviteDismissed = state.habitRecipeInviteDismissed ?? false
   const habitRecipeReviewAsked = state.habitRecipeReviewAsked ?? false
-  const pinLock = state.pinLock ?? null
   const lastDailySnapshotDate = state.lastDailySnapshotDate ?? null
   const pinReviewRequired = state.pinReviewRequired ?? false
   if (
@@ -355,7 +371,6 @@ export function parseVaultState(serialized: string): JournalVaultState {
   ) {
     throw vaultCorruptError()
   }
-  if (pinLock) assertPinLock(pinLock)
   if (lastDailySnapshotDate !== null && typeof lastDailySnapshotDate !== 'string') {
     throw vaultCorruptError()
   }
@@ -372,6 +387,15 @@ export function parseVaultState(serialized: string): JournalVaultState {
     pinLock,
     lastDailySnapshotDate,
     pinReviewRequired
+  }
+}
+
+function needsIdleLockMigration(serialized: string): boolean {
+  try {
+    const state = JSON.parse(serialized) as { preferences?: Record<string, unknown> }
+    return !state.preferences || !Object.hasOwn(state.preferences, 'idleLockMinutes')
+  } catch {
+    return false
   }
 }
 

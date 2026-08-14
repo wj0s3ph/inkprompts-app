@@ -22,7 +22,7 @@ const view = {
     question: 'What do you want to remember about today?',
     placeholder: 'Right now, I...'
   },
-  preferences: { theme: 'system', spellcheck: true },
+  preferences: { theme: 'system', spellcheck: true, idleLockMinutes: 15 },
   habitRecipe: null,
   pinEnabled: true,
   pinReviewRequired: false
@@ -63,9 +63,11 @@ describe('release Settings', () => {
         flushPending: async () => true,
         onClose: () => undefined,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
         onRestore: () => undefined,
         onViewChange: () => undefined,
         open: true,
+        protectPendingDraft: async () => 'saved',
         view
       })
     )
@@ -76,37 +78,25 @@ describe('release Settings', () => {
     await waitFor(() => expect(error).toHaveFocus())
   })
 
-  test('About shows packaged identity, offline status, license, source, and all trusted pages', async () => {
-    const user = userEvent.setup()
-    const openExternalPage = vi.fn(async () => undefined)
+  test('About shows only the packaged version', () => {
     render(
       createElement(AboutSettings, {
-        appInfo: {
-          name: 'InkPrompts Journal',
-          version: '1.0.0',
-          copyright: 'Copyright © 2026 Chao Wang',
-          privacySummary: 'Private and offline',
-          license: 'MPL-2.0',
-          sourceCodeUrl: 'https://github.com/wj0s3ph/inkprompts-app'
-        },
-        openExternalPage
+        version: '1.0.0'
       })
     )
 
     expect(screen.getByRole('heading', { name: 'About' })).toBeInTheDocument()
-    expect(screen.getByText('InkPrompts Journal 1.0.0')).toBeInTheDocument()
-    expect(screen.getByText('Private and offline')).toBeInTheDocument()
-    expect(screen.getByText('Open source under MPL-2.0')).toBeInTheDocument()
-    expect(screen.getByText('https://github.com/wj0s3ph/inkprompts-app')).toBeInTheDocument()
-    for (const page of ['Website', 'Privacy', 'Terms', 'Support'] as const) {
-      await user.click(screen.getByRole('button', { name: page }))
-    }
-    expect(openExternalPage.mock.calls).toEqual([['website'], ['privacy'], ['terms'], ['support']])
+    expect(screen.getByText('Version 1.0.0')).toBeInTheDocument()
+    expect(screen.queryByText('InkPrompts Journal')).not.toBeInTheDocument()
+    expect(screen.queryByText('Private and offline')).not.toBeInTheDocument()
+    expect(screen.queryByText('Open source under MPL-2.0')).not.toBeInTheDocument()
+    expect(screen.queryByText('https://github.com/wj0s3ph/inkprompts-app')).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
   })
 
-  test('can explicitly skip backup without trying to save an unsavable draft', async () => {
+  test('can explicitly authorize discarding an unsavable draft before erasure', async () => {
     const user = userEvent.setup()
-    const flushPending = vi.fn(async () => false)
+    const protectPendingDraft = vi.fn(async () => 'discard-authorized' as const)
     const createPortableBackup = vi.fn()
     const eraseJournalVault = vi.fn(async () => ({ screen: 'welcome' }))
     const onErased = vi.fn()
@@ -116,9 +106,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending,
         onErased,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft,
         run: (_name, action) => void action(),
         view
       })
@@ -132,7 +123,7 @@ describe('release Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Erase Journal Vault' }))
 
     await waitFor(() => expect(eraseJournalVault).toHaveBeenCalled())
-    expect(flushPending).not.toHaveBeenCalled()
+    expect(protectPendingDraft).toHaveBeenCalledWith({ action: 'erase the Journal Vault' })
     expect(createPortableBackup).not.toHaveBeenCalled()
     expect(eraseJournalVault).toHaveBeenCalledWith({ confirmation: 'ERASE', pin: '123456' })
     expect(onErased).toHaveBeenCalled()
@@ -156,12 +147,13 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => {
+        protectPendingDraft: async () => {
           order.push('save')
-          return true
+          return 'saved'
         },
         onErased: () => undefined,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
         run: (_name, action) => void action(),
         view
       })
@@ -199,9 +191,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => true,
         onErased: () => undefined,
         onErasureFailed,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft: async () => 'saved',
         run: (_name, action) => void action().catch(() => undefined),
         view
       })
@@ -232,9 +225,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => true,
         onErased: () => undefined,
         onErasureFailed,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft: async () => 'saved',
         run: (_name, action) => void action().catch(() => undefined),
         view
       })

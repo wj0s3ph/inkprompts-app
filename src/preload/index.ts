@@ -10,14 +10,23 @@ const invoke = async <T>(command: string, ...args: unknown[]): Promise<T> => {
   return Promise.reject({ name: 'JournalError', ...result.error })
 }
 
-let flushPending: () => Promise<boolean> = async () => true
+let flushPending: (intent: 'close' | 'quit') => Promise<boolean> = async () => true
+let prepareLock: () => void = () => undefined
 
-ipcRenderer.on('journal:flush-request', async () => {
+ipcRenderer.on('journal:flush-request', async (_event, value: unknown) => {
   let success = false
   try {
-    success = await flushPending()
+    success = await flushPending(value === 'quit' ? 'quit' : 'close')
   } finally {
     ipcRenderer.send('journal:flush-complete', success)
+  }
+})
+
+ipcRenderer.on('journal:prepare-lock', (_event, token: unknown) => {
+  try {
+    prepareLock()
+  } finally {
+    ipcRenderer.send('journal:lock-prepared', token)
   }
 })
 
@@ -25,13 +34,18 @@ const journal: JournalApi = {
   bootstrap: () => invoke('bootstrap'),
   startWriting: () => invoke('startWriting'),
   openDate: (date) => invoke('openDate', date),
+  listJournalHistory: () => invoke('listJournalHistory'),
   search: (query) => invoke('search', query),
   listDeviceSnapshots: () => invoke('listDeviceSnapshots'),
   createPortableBackup: (input) => invoke('createPortableBackup', input),
   restorePortableBackup: (input) => invoke('restorePortableBackup', input),
+  preparePortableBackupRestore: (input) => invoke('preparePortableBackupRestore', input),
+  commitPortableBackupRestore: (token) => invoke('commitPortableBackupRestore', token),
   exportJournal: (input) => invoke('exportJournal', input),
   deleteEntry: (date) => invoke('deleteEntry', date),
   restoreDeviceSnapshot: (id) => invoke('restoreDeviceSnapshot', id),
+  prepareDeviceSnapshotRestore: (id) => invoke('prepareDeviceSnapshotRestore', id),
+  commitDeviceSnapshotRestore: (token) => invoke('commitDeviceSnapshotRestore', token),
   configurePin: (input) => invoke('configurePin', input),
   disablePin: (pin) => invoke('disablePin', pin),
   unlock: (pin) => invoke('unlock', pin),
@@ -46,10 +60,21 @@ const journal: JournalApi = {
   saveEntry: (input) => invoke('saveEntry', input),
   getAppInfo: () => invoke('getAppInfo'),
   openExternalPage: (page) => invoke('openExternalPage', page),
+  requestLock: () => ipcRenderer.send('journal:request-lock'),
+  setIdleLock: (preference) => ipcRenderer.send('journal:set-idle-lock', preference),
+  reportActivity: () => ipcRenderer.send('journal:activity'),
+  pauseIdleLock: (scope) => ipcRenderer.send('journal:pause-idle-lock', scope),
+  resumeIdleLock: (scope) => ipcRenderer.send('journal:resume-idle-lock', scope),
   onLocked(listener) {
     const handler = (_event: Electron.IpcRendererEvent, value: unknown): void => listener(value)
     ipcRenderer.on('journal:locked', handler)
     return () => ipcRenderer.removeListener('journal:locked', handler)
+  },
+  onLockRequested(listener) {
+    prepareLock = listener
+    return () => {
+      if (prepareLock === listener) prepareLock = () => undefined
+    }
   },
   onFlushRequested(listener) {
     flushPending = listener

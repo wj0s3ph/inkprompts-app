@@ -34,7 +34,15 @@ export function createPinUseCases(session: JournalSession): PinUseCases {
           current.pinLock ?? undefined
         )
         return {
-          state: { ...current, pinLock, pinReviewRequired: false },
+          state: {
+            ...current,
+            pinLock,
+            pinReviewRequired: false,
+            preferences: {
+              ...current.preferences,
+              idleLockMinutes: current.pinLock ? current.preferences.idleLockMinutes : 15
+            }
+          },
           result: { enabled: true as const }
         }
       })
@@ -46,7 +54,11 @@ export function createPinUseCases(session: JournalSession): PinUseCases {
           throw new JournalError('INVALID_PIN', 'Enter the current PIN before disabling PIN Lock.')
         }
         return {
-          state: { ...current, pinLock: null },
+          state: {
+            ...current,
+            pinLock: null,
+            preferences: { ...current.preferences, idleLockMinutes: null }
+          },
           result: { enabled: false as const }
         }
       })
@@ -79,9 +91,12 @@ export function createPinUseCases(session: JournalSession): PinUseCases {
     },
 
     async lock() {
-      const state = await session.getSettledState()
-      if (!state.pinLock) return buildView(state, session.clock.today(), 'journal')
       session.lock()
+      const state = await session.getSettledState()
+      if (!state.pinLock) {
+        session.unlock()
+        return buildView(state, session.clock.today(), 'journal')
+      }
       return buildLockView(session.clock.today())
     },
 

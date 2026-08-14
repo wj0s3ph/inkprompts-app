@@ -14,14 +14,23 @@ export function createHabitPreferenceUseCases(session: JournalSession): HabitPre
     async updatePreferences(preferences: JournalPreferences) {
       if (
         !['system', 'light', 'dark'].includes(preferences.theme) ||
-        typeof preferences.spellcheck !== 'boolean'
+        typeof preferences.spellcheck !== 'boolean' ||
+        !['off', 5, 15, 30, 60, null].includes(preferences.idleLockMinutes)
       ) {
         throw new JournalError('INVALID_INPUT', 'Choose a valid theme and spellcheck preference.')
       }
-      return session.commit<JournalPreferences>((current) => ({
-        state: { ...current, preferences },
-        result: preferences
-      }))
+      return session.commit<JournalPreferences>((current) => {
+        if (
+          (current.pinLock && preferences.idleLockMinutes === null) ||
+          (!current.pinLock && preferences.idleLockMinutes !== null)
+        ) {
+          throw new JournalError(
+            'INVALID_INPUT',
+            'Idle Lock can be changed only while PIN Lock is enabled.'
+          )
+        }
+        return { state: { ...current, preferences }, result: preferences }
+      })
     },
 
     async saveHabitRecipe(input: { anchor: string; enabled: boolean }) {

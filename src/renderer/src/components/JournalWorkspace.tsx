@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CalendarDays,
+  BookOpen,
   Check,
   ChevronLeft,
   LockKeyhole,
@@ -21,6 +22,11 @@ import { MonthCalendar } from './MonthCalendar'
 import { RichTextEditor } from './RichTextEditor'
 import { SettingsDialog } from './SettingsDialog'
 import { HabitRecipeInvitation } from './HabitRecipeInvitation'
+import { JournalHistory } from './JournalHistory'
+import { SearchMatchText } from './SearchMatchText'
+import type { ProtectPendingDraft } from '../pending-draft'
+
+type SidebarView = 'calendar' | 'entries'
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed'
 
@@ -35,8 +41,13 @@ interface JournalWorkspaceProps {
   appInfo: AppInfo
   view: UnlockedView
   onErasureFailed(error: Error): void
+  onPendingDraftReleased(): void
+  onRequestLock(): void
   onViewChange(view: ApplicationView): void
+  registerDiscard(handler: () => void): void
   registerFlush(handler: () => Promise<boolean>): void
+  suspended: boolean
+  protectPendingDraft: ProtectPendingDraft
 }
 
 export function JournalWorkspace({
@@ -44,25 +55,49 @@ export function JournalWorkspace({
   appInfo,
   view,
   onErasureFailed,
+  onPendingDraftReleased,
+  onRequestLock,
   onViewChange,
-  registerFlush
+  registerDiscard,
+  registerFlush,
+  suspended,
+  protectPendingDraft
 }: JournalWorkspaceProps): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [sidebarView, setSidebarView] = useState<SidebarView>('calendar')
   const deferredQuery = useDeferredValue(query)
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
+  const [history, setHistory] = useState<Awaited<ReturnType<JournalApi['listJournalHistory']>>>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
   const [saveState, setSaveState] = useState<SaveState>(view.selectedEntry ? 'saved' : 'idle')
   const [saveError, setSaveError] = useState('')
   const [celebration, setCelebration] = useState('')
   const [recipeInvitation, setRecipeInvitation] = useState(false)
   const [draft, setDraft] = useState<Draft>(() => draftFromView(view))
+  const [editorSession, setEditorSession] = useState(0)
   const draftRef = useRef(draft)
   const revisionRef = useRef(0)
   const dirtyRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flushPromiseRef = useRef<Promise<boolean> | null>(null)
+  const titleRef = useRef<HTMLInputElement>(null)
+  const titleSelectionRef = useRef<{ start: number; end: number } | null>(null)
+
+  const loadHistory = useCallback(async (): Promise<void> => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      setHistory(await api.listJournalHistory())
+    } catch (reason) {
+      setHistoryError((reason as Error).message)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [api])
 
   useEffect(() => {
     let current = true
@@ -86,7 +121,10 @@ export function JournalWorkspace({
   const updateQuery = (value: string): void => {
     setQuery(value)
     setSearching(Boolean(value.trim()))
-    if (!value.trim()) setResults([])
+    if (!value.trim()) {
+      setResults([])
+      if (sidebarView === 'entries') void loadHistory()
+    }
   }
 
   const flush = useCallback(async (): Promise<boolean> => {
@@ -111,6 +149,7 @@ export function JournalWorkspace({
             selectedEntry: result.entry,
             entryDates: result.entryDates
           })
+          if (sidebarView === 'entries') void loadHistory()
           if (!dirtyRef.current) setSaveState('saved')
         } catch (reason) {
           dirtyRef.current = true
@@ -127,7 +166,7 @@ export function JournalWorkspace({
     } finally {
       flushPromiseRef.current = null
     }
-  }, [api, onViewChange, view])
+  }, [api, loadHistory, onViewChange, sidebarView, view])
 
   useEffect(() => {
     registerFlush(flush)
@@ -139,6 +178,38 @@ export function JournalWorkspace({
     },
     []
   )
+
+  useEffect(() => {
+    if (suspended) {
+      let active = true
+      queueMicrotask(() => {
+        if (!active) return
+        setSettingsOpen(false)
+        setRecipeInvitation(false)
+      })
+      const title = titleRef.current
+      if (title && document.activeElement === title) {
+        titleSelectionRef.current = {
+          start: title.selectionStart ?? title.value.length,
+          end: title.selectionEnd ?? title.value.length
+        }
+        title.blur()
+      } else {
+        titleSelectionRef.current = null
+      }
+      return () => {
+        active = false
+      }
+    }
+    const selection = titleSelectionRef.current
+    if (!selection) return
+    titleSelectionRef.current = null
+    const frame = window.requestAnimationFrame(() => {
+      titleRef.current?.focus()
+      titleRef.current?.setSelectionRange(selection.start, selection.end)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [suspended])
 
   const updateDraft = (change: Partial<Omit<Draft, 'date'>>): void => {
     if (!view.editable) return
@@ -160,9 +231,44 @@ export function JournalWorkspace({
     timerRef.current = setTimeout(() => void flush(), 500)
   }
 
+  const replaceDraftFromView = (nextView: UnlockedView): void => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    const nextDraft = draftFromView(nextView)
+    draftRef.current = nextDraft
+    dirtyRef.current = false
+    revisionRef.current += 1
+    setDraft(nextDraft)
+    setEditorSession((value) => value + 1)
+    setSaveState(nextView.selectedEntry ? 'saved' : 'idle')
+    setSaveError('')
+  }
+
+  const discardDraft = useCallback((): void => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    dirtyRef.current = false
+    revisionRef.current += 1
+    const persisted = draftFromView(view)
+    draftRef.current = persisted
+    setDraft(persisted)
+    setSaveState(view.selectedEntry ? 'saved' : 'idle')
+    setSaveError('')
+  }, [view])
+
+  useEffect(() => {
+    registerDiscard(discardDraft)
+  }, [discardDraft, registerDiscard])
+
   const navigate = async (date: string): Promise<void> => {
     if (!(await flush())) return
-    onViewChange(await api.openDate(date))
+    const nextView = await api.openDate(date)
+    replaceDraftFromView(nextView)
+    onViewChange(nextView)
     setResults([])
     setQuery('')
   }
@@ -198,31 +304,21 @@ export function JournalWorkspace({
       return
     try {
       const result = await api.deleteEntry(view.selectedDate)
-      onViewChange({ ...view, selectedEntry: null, entryDates: result.entryDates })
+      const nextView = { ...view, selectedEntry: null, entryDates: result.entryDates }
+      replaceDraftFromView(nextView)
+      onViewChange(nextView)
+      if (sidebarView === 'entries') void loadHistory()
     } catch (reason) {
       setSaveError((reason as Error).message)
     }
   }
 
-  const lock = async (): Promise<void> => {
-    if (!(await flush())) return
-    onViewChange(await api.lock())
-  }
-
   const applyRestoredView = (restored: UnlockedView): void => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-    const nextDraft = draftFromView(restored)
-    draftRef.current = nextDraft
-    dirtyRef.current = false
-    revisionRef.current += 1
-    setDraft(nextDraft)
-    setSaveState(restored.selectedEntry ? 'saved' : 'idle')
-    setSaveError('')
+    replaceDraftFromView(restored)
     setResults([])
     setQuery('')
+    setSidebarView('calendar')
+    setHistory([])
     onViewChange(restored)
   }
 
@@ -306,8 +402,31 @@ export function JournalWorkspace({
                 onChange={(event) => updateQuery(event.target.value)}
               />
             </label>
-            {query ? (
-              <section aria-label="Search results" className="mt-3 max-h-52 overflow-y-auto">
+            <div aria-label="Journal views" className="mt-3 grid grid-cols-2" role="tablist">
+              <button
+                aria-selected={sidebarView === 'calendar'}
+                className={`secondary-button ${sidebarView === 'calendar' ? 'bg-[var(--surface-muted)]' : ''}`}
+                role="tab"
+                type="button"
+                onClick={() => setSidebarView('calendar')}
+              >
+                <CalendarDays aria-hidden="true" size={16} /> Calendar
+              </button>
+              <button
+                aria-selected={sidebarView === 'entries'}
+                className={`secondary-button ${sidebarView === 'entries' ? 'bg-[var(--surface-muted)]' : ''}`}
+                role="tab"
+                type="button"
+                onClick={() => {
+                  setSidebarView('entries')
+                  if (!query.trim()) void loadHistory()
+                }}
+              >
+                <BookOpen aria-hidden="true" size={16} /> Entries
+              </button>
+            </div>
+            {query.trim() ? (
+              <section aria-label="Search results" className="mt-3 min-h-0 flex-1 overflow-y-auto">
                 <p className="px-2 pb-2 text-xs text-[var(--text-subtle)]" role="status">
                   {searching
                     ? 'Searching…'
@@ -325,27 +444,42 @@ export function JournalWorkspace({
                           {formatDate(result.date)}
                         </span>
                         <span className="block truncate text-sm font-medium">
-                          {result.title || 'Untitled'}
+                          <SearchMatchText
+                            ranges={result.titleMatches}
+                            text={result.title || 'Untitled'}
+                          />
                         </span>
                         <span className="mt-1 block line-clamp-2 text-xs text-[var(--text-muted)]">
-                          {result.snippet}
+                          <SearchMatchText ranges={result.snippetMatches} text={result.snippet} />
                         </span>
                       </button>
                     </li>
                   ))}
                 </ul>
               </section>
-            ) : (
+            ) : sidebarView === 'calendar' ? (
               <MonthCalendar
                 selectedDate={view.selectedDate}
                 today={view.today}
                 entryDates={view.entryDates}
                 onSelect={(date) => void navigate(date)}
               />
+            ) : (
+              <JournalHistory
+                error={historyError}
+                items={history}
+                loading={historyLoading}
+                onSelect={(date) => void navigate(date)}
+              />
             )}
-            <div className="mt-auto space-y-1 pt-6">
+            <div className="sidebar-footer space-y-1 pt-3">
               {view.pinEnabled ? (
-                <button className="sidebar-action" type="button" onClick={() => void lock()}>
+                <button
+                  className="sidebar-action"
+                  type="button"
+                  onClick={onRequestLock}
+                  onMouseDown={(event) => event.preventDefault()}
+                >
                   <LockKeyhole aria-hidden="true" size={18} /> Lock
                 </button>
               ) : null}
@@ -433,12 +567,15 @@ export function JournalWorkspace({
                     disabled={!view.editable}
                     maxLength={10_000}
                     placeholder="Optional title"
+                    ref={titleRef}
                     value={draft.title}
                     onChange={(event) => updateDraft({ title: event.target.value })}
                   />
                 </label>
                 <div className="editor-surface">
                   <RichTextEditor
+                    key={editorSession}
+                    autoFocus={view.editable && !view.selectedEntry}
                     content={draft.content}
                     editable={view.editable}
                     focusKey={view.selectedDate}
@@ -450,6 +587,7 @@ export function JournalWorkspace({
                         : undefined
                     }
                     spellcheck={view.preferences.spellcheck}
+                    suspended={suspended}
                     onChange={(content) => updateDraft({ content })}
                   />
                 </div>
@@ -507,10 +645,12 @@ export function JournalWorkspace({
         api={api}
         appInfo={appInfo}
         flushPending={flush}
+        protectPendingDraft={protectPendingDraft}
         open={settingsOpen}
         view={view}
         onClose={() => setSettingsOpen(false)}
         onErasureFailed={onErasureFailed}
+        onPendingDraftReleased={onPendingDraftReleased}
         onRestore={applyRestoredView}
         onViewChange={onViewChange}
       />

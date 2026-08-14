@@ -4,15 +4,17 @@ import type { JournalApi } from '../../../../preload/index'
 import type { JournalApiError, UnlockedView } from '../../types'
 import { VaultErasureScopeNotice } from '../VaultErasureScopeNotice'
 import type { RunSettingAction } from './types'
+import type { ProtectPendingDraft } from '../../pending-draft'
 
 interface VaultErasureSettingsProps {
   api: JournalApi
   busy: string
   view: UnlockedView
   run: RunSettingAction
-  flushPending(): Promise<boolean>
   onErased(view: Awaited<ReturnType<JournalApi['eraseJournalVault']>>): void
   onErasureFailed(error: Error): void
+  onPendingDraftReleased(): void
+  protectPendingDraft: ProtectPendingDraft
 }
 
 export function VaultErasureSettings({
@@ -20,9 +22,10 @@ export function VaultErasureSettings({
   busy,
   view,
   run,
-  flushPending,
   onErased,
-  onErasureFailed
+  onErasureFailed,
+  onPendingDraftReleased,
+  protectPendingDraft
 }: VaultErasureSettingsProps): React.JSX.Element {
   const [mode, setMode] = useState<'backup' | 'skip'>('backup')
   const [password, setPassword] = useState('')
@@ -33,10 +36,9 @@ export function VaultErasureSettings({
 
   const erase = (): void => {
     run('erase-vault', async () => {
+      const decision = await protectPendingDraft({ action: 'erase the Journal Vault' })
+      if (decision === 'cancelled') return
       if (mode === 'backup') {
-        if (!(await flushPending())) {
-          throw new Error('Resolve the current save error before creating the safety backup.')
-        }
         const result = await api.createPortableBackup({ password, confirmation })
         if (result.status !== 'saved') {
           throw new Error('Journal Vault Erasure was cancelled because no backup was saved.')
@@ -53,6 +55,7 @@ export function VaultErasureSettings({
         if (error.code === 'SAVE_FAILED') onErasureFailed(error)
         throw reason
       }
+      onPendingDraftReleased()
       onErased(erased)
     })
   }

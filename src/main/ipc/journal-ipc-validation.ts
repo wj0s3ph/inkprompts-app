@@ -7,6 +7,7 @@ type RecordValue = Record<string, unknown>
 const noArgumentCommands = new Set<JournalCommand>([
   'bootstrap',
   'startWriting',
+  'listJournalHistory',
   'listDeviceSnapshots',
   'lock',
   'dismissHabitRecipeInvite',
@@ -31,6 +32,9 @@ export function assertJournalIpcArguments(command: JournalCommand, args: readonl
       assertStringArgument(args, 10)
       return
     case 'restoreDeviceSnapshot':
+    case 'prepareDeviceSnapshotRestore':
+    case 'commitDeviceSnapshotRestore':
+    case 'commitPortableBackupRestore':
       assertStringArgument(args, 300)
       return
     case 'disablePin':
@@ -54,7 +58,8 @@ export function assertJournalIpcArguments(command: JournalCommand, args: readonl
       assertBoundedStrings(input, ['password', 'confirmation'], 1_024)
       return
     }
-    case 'restorePortableBackup': {
+    case 'restorePortableBackup':
+    case 'preparePortableBackupRestore': {
       const input = assertObjectArgument(args, ['password'])
       assertBoundedStrings(input, ['password'], 1_024)
       return
@@ -76,10 +81,11 @@ export function assertJournalIpcArguments(command: JournalCommand, args: readonl
       return
     }
     case 'updatePreferences': {
-      const input = assertObjectArgument(args, ['theme', 'spellcheck'])
+      const input = assertObjectArgument(args, ['theme', 'spellcheck', 'idleLockMinutes'])
       if (
         !['system', 'light', 'dark'].includes(input.theme as string) ||
-        typeof input.spellcheck !== 'boolean'
+        typeof input.spellcheck !== 'boolean' ||
+        !['off', 5, 15, 30, 60, null].includes(input.idleLockMinutes as string | number | null)
       ) {
         invalidShape()
       }

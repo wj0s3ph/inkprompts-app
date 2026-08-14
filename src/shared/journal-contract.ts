@@ -25,6 +25,26 @@ export interface DailyEntry {
   completedAt: string | null
 }
 
+export interface JournalHistoryItem {
+  date: string
+  title: string | null
+  snippet: string
+  empty: boolean
+}
+
+export interface TextMatchRange {
+  start: number
+  end: number
+}
+
+export interface JournalSearchResult {
+  date: string
+  title: string | null
+  snippet: string
+  titleMatches: TextMatchRange[]
+  snippetMatches: TextMatchRange[]
+}
+
 export interface SaveEntryInput {
   date: string
   title: string
@@ -37,9 +57,12 @@ export interface SaveEntryResult {
   entryDates: string[]
 }
 
+export type IdleLockMinutes = 'off' | 5 | 15 | 30 | 60
+
 export interface JournalPreferences {
   theme: 'system' | 'light' | 'dark'
   spellcheck: boolean
+  idleLockMinutes: IdleLockMinutes | null
 }
 
 export interface CompleteTodayResult {

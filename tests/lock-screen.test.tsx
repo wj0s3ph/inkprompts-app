@@ -28,7 +28,7 @@ const restoredView: UnlockedView = {
     question: 'What do you want to remember about today?',
     placeholder: 'Right now, I...'
   },
-  preferences: { theme: 'system', spellcheck: true },
+  preferences: { theme: 'system', spellcheck: true, idleLockMinutes: null },
   habitRecipe: null,
   pinEnabled: false,
   pinReviewRequired: true
@@ -65,10 +65,23 @@ function renderLockScreen(options?: {
       clearForgottenPin,
       onCleared,
       onRestored,
+      onErasureFailed: () => undefined,
+      onPendingDraftReleased: () => undefined,
       onUnlock: async () => restoredView,
       onUnlocked: () => undefined,
       openExternalPage,
-      restorePortableBackup
+      preparePortableBackupRestore: async (input) => {
+        const result = await restorePortableBackup(input)
+        return result.status === 'cancelled'
+          ? result
+          : { status: 'ready' as const, token: 'prepared-backup' }
+      },
+      commitPortableBackupRestore: async () => {
+        const result = await restorePortableBackup.mock.results.at(-1)?.value
+        if (!result || result.status !== 'restored') throw new Error('Restore was not prepared.')
+        return result
+      },
+      protectPendingDraft: async () => 'saved' as const
     })
   )
 

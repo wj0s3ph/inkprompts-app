@@ -4,6 +4,7 @@ import type { JournalApi } from '../../../preload/index'
 import type { AppInfo } from '../../../shared/product-info'
 import type { JournalApiError, UnlockedView } from '../types'
 import { VaultErasureScopeNotice } from './VaultErasureScopeNotice'
+import type { ProtectPendingDraft } from '../pending-draft'
 
 const ERASE_CONFIRMATION = 'DELETE MY JOURNAL VAULT'
 
@@ -11,24 +12,36 @@ type LockScreenView = 'pin' | 'recovery' | 'restore' | 'erase'
 
 interface LockScreenProps {
   appInfo: AppInfo
+  hasPendingDraft: boolean
+  quitBlocked?: boolean
   onUnlock: JournalApi['unlock']
   onUnlocked(view: UnlockedView): void
   onCleared(view: UnlockedView): void
   onRestored(view: UnlockedView): void
+  onErasureFailed(error: Error): void
+  onPendingDraftReleased(): void
   clearForgottenPin: JournalApi['clearForgottenPin']
   openExternalPage: JournalApi['openExternalPage']
-  restorePortableBackup: JournalApi['restorePortableBackup']
+  preparePortableBackupRestore: JournalApi['preparePortableBackupRestore']
+  commitPortableBackupRestore: JournalApi['commitPortableBackupRestore']
+  protectPendingDraft: ProtectPendingDraft
 }
 
 export function LockScreen({
   appInfo,
+  hasPendingDraft,
+  quitBlocked = false,
   onUnlock,
   onUnlocked,
   onCleared,
   onRestored,
+  onErasureFailed,
+  onPendingDraftReleased,
   clearForgottenPin,
   openExternalPage,
-  restorePortableBackup
+  preparePortableBackupRestore,
+  commitPortableBackupRestore,
+  protectPendingDraft
 }: LockScreenProps): React.JSX.Element {
   const [screen, setScreen] = useState<LockScreenView>('pin')
   const [pin, setPin] = useState('')
@@ -73,13 +86,23 @@ export function LockScreen({
     setError('')
     setMessage('')
     try {
-      const result = await restorePortableBackup({ password: backupPassword })
-      if (result.status === 'restored') {
-        setBackupPassword('')
-        onRestored(result.view)
-      } else {
+      const preparation = await preparePortableBackupRestore({ password: backupPassword })
+      if (preparation.status === 'cancelled') {
         setMessage('No backup was selected. Your local Journal Vault was not changed.')
+        return
       }
+      const decision = await protectPendingDraft({
+        action: 'restore this Portable Backup',
+        concealDetails: true
+      })
+      if (decision === 'cancelled') {
+        setMessage('Restore cancelled. The unsaved writing remains protected behind PIN Lock.')
+        return
+      }
+      const result = await commitPortableBackupRestore(preparation.token)
+      setBackupPassword('')
+      onPendingDraftReleased()
+      onRestored(result.view)
     } catch (reason) {
       setError((reason as Error).message)
     } finally {
@@ -92,9 +115,17 @@ export function LockScreen({
     setBusy('erase')
     setError('')
     try {
+      const decision = await protectPendingDraft({
+        action: 'erase the local Journal Vault',
+        concealDetails: true
+      })
+      if (decision === 'cancelled') return
       onCleared(await clearForgottenPin(confirmation))
+      onPendingDraftReleased()
       setConfirmation('')
     } catch (reason) {
+      const journalError = reason as JournalApiError
+      if (journalError.code === 'SAVE_FAILED') onErasureFailed(journalError)
       setError((reason as Error).message)
     } finally {
       setBusy('')
@@ -114,10 +145,12 @@ export function LockScreen({
             onForgot={() => navigate('recovery')}
             onPinChange={setPin}
             onSubmit={submitPin}
+            quitBlocked={quitBlocked}
           />
         ) : null}
         {screen === 'recovery' ? (
           <RecoveryChoices
+            hasPendingDraft={hasPendingDraft}
             onBack={() => navigate('pin')}
             onErase={() => navigate('erase')}
             onRestore={() => navigate('restore')}
@@ -192,6 +225,7 @@ interface PinEntryProps {
   onForgot(): void
   onPinChange(pin: string): void
   onSubmit(event: React.FormEvent): Promise<void>
+  quitBlocked: boolean
 }
 
 function PinEntry({
@@ -201,7 +235,8 @@ function PinEntry({
   pin,
   onForgot,
   onPinChange,
-  onSubmit
+  onSubmit,
+  quitBlocked
 }: PinEntryProps): React.JSX.Element {
   return (
     <>
@@ -216,6 +251,11 @@ function PinEntry({
         Enter your 6-digit privacy PIN. Your Journal Vault remains protected by this device’s system
         key.
       </p>
+      {quitBlocked ? (
+        <p className="settings-warning mt-5" role="alert">
+          Unlock first to save or explicitly discard the unsaved writing before quitting.
+        </p>
+      ) : null}
       <form className="mt-7" onSubmit={(event) => void onSubmit(event)}>
         <label className="field-label" htmlFor="unlock-pin">
           PIN
@@ -259,12 +299,18 @@ function PinEntry({
 }
 
 interface RecoveryChoicesProps {
+  hasPendingDraft: boolean
   onBack(): void
   onErase(): void
   onRestore(): void
 }
 
-function RecoveryChoices({ onBack, onErase, onRestore }: RecoveryChoicesProps): React.JSX.Element {
+function RecoveryChoices({
+  hasPendingDraft,
+  onBack,
+  onErase,
+  onRestore
+}: RecoveryChoicesProps): React.JSX.Element {
   return (
     <>
       <div className="lock-icon">
@@ -276,6 +322,12 @@ function RecoveryChoices({ onBack, onErase, onRestore }: RecoveryChoicesProps): 
         Your PIN cannot be recovered or reset. Restore a Portable Backup, or erase the journal data
         stored on this device and start over.
       </p>
+      {hasPendingDraft ? (
+        <p className="settings-warning mt-5" role="note">
+          Unsaved writing is protected behind PIN Lock. Return to PIN and unlock to save it before
+          using a recovery option.
+        </p>
+      ) : null}
 
       <div className="recovery-choices">
         <section className="recovery-choice" aria-labelledby="restore-choice-title">

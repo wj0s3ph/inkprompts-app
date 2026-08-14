@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface MonthCalendarProps {
@@ -14,11 +14,23 @@ export function MonthCalendar({
   entryDates,
   onSelect
 }: MonthCalendarProps): React.JSX.Element {
-  const [visibleMonth, setVisibleMonth] = useState(selectedDate.slice(0, 7))
+  const [monthSelection, setMonthSelection] = useState({
+    selectedDate,
+    visibleMonth: selectedDate.slice(0, 7)
+  })
+  const visibleMonth =
+    monthSelection.selectedDate === selectedDate
+      ? monthSelection.visibleMonth
+      : selectedDate.slice(0, 7)
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
+  const [dateValue, setDateValue] = useState(selectedDate)
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const markedDates = useMemo(() => new Set(entryDates), [entryDates])
   const [year, month] = visibleMonth.split('-').map(Number)
-  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay()
+  const weekStartsOn = firstDayForLocale(navigator.language)
+  const firstWeekday = (new Date(Date.UTC(year, month - 1, 1)).getUTCDay() - weekStartsOn + 7) % 7
   const days = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  const weekdays = rotateWeekdays(weekStartsOn)
   const monthLabel = new Intl.DateTimeFormat('en', {
     month: 'long',
     year: 'numeric',
@@ -27,7 +39,24 @@ export function MonthCalendar({
 
   const moveMonth = (offset: number): void => {
     const next = new Date(Date.UTC(year, month - 1 + offset, 1))
-    setVisibleMonth(`${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}`)
+    setMonthSelection({
+      selectedDate,
+      visibleMonth: `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}`
+    })
+  }
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (datePickerOpen && !dialog.open) dialog.showModal()
+    if (!datePickerOpen && dialog.open) dialog.close()
+  }, [datePickerOpen])
+
+  const submitDate = (event: React.FormEvent): void => {
+    event.preventDefault()
+    if (!dateValue) return
+    setDatePickerOpen(false)
+    onSelect(dateValue)
   }
 
   return (
@@ -55,11 +84,12 @@ export function MonthCalendar({
       </div>
       <div
         className="mt-3 grid grid-cols-7 text-center text-[11px] font-semibold text-[var(--text-subtle)]"
-        aria-hidden="true"
+        aria-label="Weekdays"
+        role="row"
       >
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
-          <span key={`${day}-${index}`} className="py-1">
-            {day}
+        {weekdays.map((day) => (
+          <span aria-label={day.name} className="py-1" key={day.name} role="columnheader">
+            {day.label}
           </span>
         ))}
       </div>
@@ -91,6 +121,79 @@ export function MonthCalendar({
           )
         })}
       </div>
+      <button
+        className="text-button mt-3 w-full"
+        type="button"
+        onClick={() => {
+          setDateValue(selectedDate)
+          setDatePickerOpen(true)
+        }}
+      >
+        Go to date
+      </button>
+      <dialog
+        aria-labelledby="go-to-date-title"
+        className="prompt-dialog"
+        ref={dialogRef}
+        onCancel={(event) => {
+          event.preventDefault()
+          setDatePickerOpen(false)
+        }}
+        onClose={() => setDatePickerOpen(false)}
+      >
+        <form onSubmit={submitDate}>
+          <h2 className="font-editorial text-2xl" id="go-to-date-title">
+            Go to date
+          </h2>
+          <label className="field-label mt-5" htmlFor="go-to-date-value">
+            Date
+          </label>
+          <input
+            autoFocus
+            className="text-field"
+            id="go-to-date-value"
+            required
+            type="date"
+            value={dateValue}
+            onChange={(event) => setDateValue(event.target.value)}
+          />
+          <div className="mt-6 flex justify-end gap-3">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setDatePickerOpen(false)}
+            >
+              Cancel
+            </button>
+            <button className="primary-button" type="submit">
+              Open date
+            </button>
+          </div>
+        </form>
+      </dialog>
     </section>
   )
+}
+
+const weekdayNames = [
+  { name: 'Sunday', label: 'Su' },
+  { name: 'Monday', label: 'Mo' },
+  { name: 'Tuesday', label: 'Tu' },
+  { name: 'Wednesday', label: 'We' },
+  { name: 'Thursday', label: 'Th' },
+  { name: 'Friday', label: 'Fr' },
+  { name: 'Saturday', label: 'Sa' }
+] as const
+
+function rotateWeekdays(firstDay: 0 | 1): (typeof weekdayNames)[number][] {
+  return [...weekdayNames.slice(firstDay), ...weekdayNames.slice(0, firstDay)]
+}
+
+function firstDayForLocale(language: string): 0 | 1 {
+  const locale = new Intl.Locale(language) as Intl.Locale & {
+    weekInfo?: { firstDay: number }
+    getWeekInfo?: () => { firstDay: number }
+  }
+  const firstDay = locale.weekInfo?.firstDay ?? locale.getWeekInfo?.().firstDay
+  return firstDay === 7 ? 0 : 1
 }

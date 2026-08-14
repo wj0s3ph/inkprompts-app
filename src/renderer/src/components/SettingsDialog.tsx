@@ -11,6 +11,7 @@ import type { RunSettingAction } from './settings/types'
 import type { AppInfo } from '../../../shared/product-info'
 import { AboutSettings } from './settings/AboutSettings'
 import { VaultErasureSettings } from './settings/VaultErasureSettings'
+import type { ProtectPendingDraft } from '../pending-draft'
 
 interface SettingsDialogProps {
   api: JournalApi
@@ -20,8 +21,10 @@ interface SettingsDialogProps {
   flushPending(): Promise<boolean>
   onClose(): void
   onErasureFailed(error: Error): void
+  onPendingDraftReleased(): void
   onRestore(view: UnlockedView): void
   onViewChange(view: ApplicationView): void
+  protectPendingDraft: ProtectPendingDraft
 }
 
 export function SettingsDialog({
@@ -32,8 +35,10 @@ export function SettingsDialog({
   flushPending,
   onClose,
   onErasureFailed,
+  onPendingDraftReleased,
   onRestore,
-  onViewChange
+  onViewChange,
+  protectPendingDraft
 }: SettingsDialogProps): React.JSX.Element {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const errorRef = useRef<HTMLParagraphElement>(null)
@@ -115,8 +120,10 @@ export function SettingsDialog({
           api={api}
           onError={setError}
           onRestore={onRestore}
+          onPendingDraftReleased={onPendingDraftReleased}
           open={open}
           requireDurableDraft={requireDurableDraft}
+          protectPendingDraft={protectPendingDraft}
           run={run}
           showMessage={setMessage}
         />
@@ -129,9 +136,10 @@ export function SettingsDialog({
         <VaultErasureSettings
           api={api}
           busy={busy}
-          flushPending={flushPending}
           onErased={onViewChange}
           onErasureFailed={onErasureFailed}
+          onPendingDraftReleased={onPendingDraftReleased}
+          protectPendingDraft={protectPendingDraft}
           run={run}
           view={view}
         />

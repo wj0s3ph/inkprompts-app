@@ -3,6 +3,8 @@ import type {
   DailyEntry,
   DeviceSnapshotMetadata,
   HabitRecipe,
+  JournalHistoryItem,
+  JournalSearchResult,
   JournalPreferences,
   SaveEntryInput,
   SaveEntryResult
@@ -65,7 +67,8 @@ export interface JournalApplication {
   bootstrap(): Promise<JournalApplicationView>
   startWriting(): Promise<UnlockedApplicationView>
   openDate(date: string): Promise<UnlockedApplicationView>
-  search(query: string): Promise<Array<{ date: string; title: string | null; snippet: string }>>
+  listJournalHistory(): Promise<JournalHistoryItem[]>
+  search(query: string): Promise<JournalSearchResult[]>
   listDeviceSnapshots(): Promise<DeviceSnapshotMetadata[]>
   createPortableBackup(input: {
     password: string
@@ -79,12 +82,22 @@ export interface JournalApplication {
         view: UnlockedApplicationView
       }
   >
+  preparePortableBackupRestore(input: {
+    password: string
+  }): Promise<{ status: 'cancelled' } | { status: 'ready'; token: string }>
+  commitPortableBackupRestore(token: string): Promise<{
+    status: 'restored'
+    pinReviewRequired: true
+    view: UnlockedApplicationView
+  }>
   exportJournal(input: {
     format: JournalExportFormat
     unencryptedConfirmed: boolean
   }): Promise<{ status: 'saved' | 'cancelled' }>
   deleteEntry(date: string): Promise<{ deletedDate: string; entryDates: string[] }>
   restoreDeviceSnapshot(id: string): Promise<UnlockedApplicationView>
+  prepareDeviceSnapshotRestore(id: string): Promise<{ status: 'ready'; token: string }>
+  commitDeviceSnapshotRestore(token: string): Promise<UnlockedApplicationView>
   configurePin(input: {
     pin: string
     confirmation: string

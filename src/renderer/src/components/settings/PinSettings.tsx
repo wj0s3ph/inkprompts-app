@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, KeyRound } from 'lucide-react'
 import type { CommonSettingsProps } from './types'
+import type { IdleLockMinutes } from '../../../../shared/journal-contract'
 
 export function PinSettings({
   api,
@@ -34,6 +35,14 @@ export function PinSettings({
       await api.disablePin(currentPin)
       setCurrentPin('')
       showMessage('PIN Lock disabled.')
+      await refresh()
+    })
+  }
+
+  const updateIdleLock = (idleLockMinutes: IdleLockMinutes): void => {
+    run('idle-lock', async () => {
+      await api.updatePreferences({ ...view.preferences, idleLockMinutes })
+      showMessage('Idle Lock updated.')
       await refresh()
     })
   }
@@ -97,6 +106,30 @@ export function PinSettings({
           </button>
         ) : null}
       </div>
+      {view.pinEnabled ? (
+        <label className="mt-5 block max-w-xs">
+          <span className="field-label">Lock after inactivity</span>
+          <select
+            aria-describedby="idle-lock-description"
+            className="text-field"
+            disabled={busy === 'idle-lock'}
+            value={view.preferences.idleLockMinutes ?? 15}
+            onChange={(event) => {
+              const value = event.target.value
+              updateIdleLock(value === 'off' ? 'off' : (Number(value) as IdleLockMinutes))
+            }}
+          >
+            <option value="off">Off</option>
+            <option value="5">5 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">60 minutes</option>
+          </select>
+          <span id="idle-lock-description" className="mt-2 block text-xs text-[var(--text-muted)]">
+            Clicks, typing and scrolling in InkPrompts Journal restart this timer.
+          </span>
+        </label>
+      ) : null}
     </section>
   )
 }

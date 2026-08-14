@@ -432,6 +432,12 @@ select:disabled {
   text-align: left;
 }
 
+.search-match {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+  font-weight: 700;
+}
+
 .save-status {
   border: 1px solid transparent;
   border-radius: 0;

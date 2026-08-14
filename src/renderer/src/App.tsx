@@ -6,25 +6,217 @@ import type { AppInfo } from '../../shared/product-info'
 import { JournalWorkspace } from './components/JournalWorkspace'
 import { LockScreen } from './components/LockScreen'
 import { Welcome } from './components/Welcome'
+import { PendingDraftDialog } from './components/PendingDraftDialog'
+import type {
+  PendingDraftRequest,
+  PendingDraftResolution,
+  ProtectPendingDraft
+} from './pending-draft'
+
+type LockSaveStatus = 'idle' | 'pending' | 'saved' | 'failed'
+
+interface DraftDecision extends PendingDraftRequest {
+  date: string
+  resolve(resolution: PendingDraftResolution): void
+}
 
 function App(): React.JSX.Element {
   const api: JournalApi | null =
     typeof window !== 'undefined' && 'journal' in window ? window.journal : null
   const [view, setView] = useState<ApplicationView | null>(null)
+  const [workspaceView, setWorkspaceView] = useState<UnlockedView | null>(null)
+  const [workspaceKey, setWorkspaceKey] = useState(0)
   const [loading, setLoading] = useState(Boolean(api))
   const [starting, setStarting] = useState(false)
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [error, setError] = useState('')
   const [erasureFailure, setErasureFailure] = useState('')
+  const [pendingDraft, setPendingDraft] = useState(false)
+  const [quitBlocked, setQuitBlocked] = useState(false)
+  const [draftDecision, setDraftDecision] = useState<DraftDecision | null>(null)
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
+  const discardRef = useRef<() => void>(() => undefined)
+  const viewRef = useRef<ApplicationView | null>(null)
+  const workspaceViewRef = useRef<UnlockedView | null>(null)
+  const pendingDraftRef = useRef(false)
+  const lockSaveStatusRef = useRef<LockSaveStatus>('idle')
+  const lockSaveRef = useRef<Promise<boolean> | null>(null)
+  const draftDecisionRef = useRef<DraftDecision | null>(null)
+
   const registerFlush = useCallback((handler: () => Promise<boolean>) => {
     flushRef.current = handler
   }, [])
-  const updateView = useCallback((nextView: ApplicationView): void => {
-    if (nextView.access === 'locked') flushRef.current = async (): Promise<boolean> => true
-    setErasureFailure('')
-    setView(nextView)
+
+  const registerDiscard = useCallback((handler: () => void) => {
+    discardRef.current = handler
   }, [])
+
+  const rememberWorkspace = useCallback((nextView: UnlockedView | null): void => {
+    workspaceViewRef.current = nextView
+    setWorkspaceView(nextView)
+  }, [])
+
+  const showView = useCallback(
+    (nextView: ApplicationView): void => {
+      setErasureFailure('')
+      viewRef.current = nextView
+      setView(nextView)
+      if (nextView.access === 'unlocked') rememberWorkspace(nextView)
+    },
+    [rememberWorkspace]
+  )
+
+  const updateWorkspaceView = useCallback(
+    (nextView: ApplicationView): void => {
+      if (nextView.access === 'locked') {
+        showView(nextView)
+        return
+      }
+      setErasureFailure('')
+      rememberWorkspace(nextView)
+      if (viewRef.current?.access !== 'locked') {
+        viewRef.current = nextView
+        setView(nextView)
+      }
+    },
+    [rememberWorkspace, showView]
+  )
+
+  const setHasPendingDraft = useCallback((value: boolean): void => {
+    pendingDraftRef.current = value
+    setPendingDraft(value)
+  }, [])
+
+  const releaseWorkspaceBehindLock = useCallback((): void => {
+    if (viewRef.current?.access !== 'locked') return
+    rememberWorkspace(null)
+    flushRef.current = async (): Promise<boolean> => true
+    discardRef.current = () => undefined
+  }, [rememberWorkspace])
+
+  const finishDraftDecision = useCallback((resolution: PendingDraftResolution): void => {
+    const current = draftDecisionRef.current
+    if (!current) return
+    draftDecisionRef.current = null
+    setDraftDecision(null)
+    current.resolve(resolution)
+  }, [])
+
+  const protectPendingDraft = useCallback<ProtectPendingDraft>(
+    async (request) => {
+      const locked = viewRef.current?.access === 'locked'
+      if (!locked) {
+        if (await flushRef.current()) {
+          setHasPendingDraft(false)
+          return 'saved'
+        }
+        setHasPendingDraft(true)
+      } else if (!pendingDraftRef.current) {
+        return 'saved'
+      }
+
+      if (draftDecisionRef.current) return 'cancelled'
+      return new Promise<PendingDraftResolution>((resolve) => {
+        const decision: DraftDecision = {
+          ...request,
+          concealDetails: locked || request.concealDetails,
+          date: workspaceViewRef.current?.selectedDate ?? '',
+          resolve
+        }
+        draftDecisionRef.current = decision
+        setDraftDecision(decision)
+      })
+    },
+    [setHasPendingDraft]
+  )
+
+  const handleFlushRequested = useCallback(
+    async (intent: 'close' | 'quit'): Promise<boolean> => {
+      if (viewRef.current?.access === 'locked') {
+        if (lockSaveRef.current) await lockSaveRef.current
+        if (pendingDraftRef.current || lockSaveStatusRef.current === 'failed') {
+          setQuitBlocked(true)
+          return false
+        }
+      }
+      const resolution = await protectPendingDraft({
+        action: intent === 'quit' ? 'quit InkPrompts Journal' : 'close this window'
+      })
+      if (resolution === 'discard-authorized') {
+        discardRef.current()
+        setHasPendingDraft(false)
+      }
+      return resolution !== 'cancelled'
+    },
+    [protectPendingDraft, setHasPendingDraft]
+  )
+
+  const beginLockPreparation = useCallback((): void => {
+    if (!workspaceViewRef.current || lockSaveStatusRef.current === 'pending') return
+    lockSaveStatusRef.current = 'pending'
+    const operation = flushRef.current()
+    lockSaveRef.current = operation
+    void operation
+      .then((success) => {
+        lockSaveStatusRef.current = success ? 'saved' : 'failed'
+        setHasPendingDraft(!success)
+        if (success) releaseWorkspaceBehindLock()
+      })
+      .finally(() => {
+        if (lockSaveRef.current === operation) lockSaveRef.current = null
+      })
+  }, [releaseWorkspaceBehindLock, setHasPendingDraft])
+
+  const handleLocked = useCallback(
+    (nextView: LockedView): void => {
+      setQuitBlocked(false)
+      showView(nextView)
+      if (lockSaveStatusRef.current === 'idle' || lockSaveStatusRef.current === 'saved') {
+        releaseWorkspaceBehindLock()
+      }
+    },
+    [releaseWorkspaceBehindLock, showView]
+  )
+
+  const unlockWithPendingDraft: JournalApi['unlock'] = useCallback(
+    async (pin) => {
+      if (!api) throw new Error('InkPrompts Journal is unavailable.')
+      const unlocked = await api.unlock(pin)
+      if (lockSaveRef.current) await lockSaveRef.current
+      return lockSaveStatusRef.current === 'failed' && workspaceViewRef.current
+        ? workspaceViewRef.current
+        : unlocked
+    },
+    [api]
+  )
+
+  const completeUnlock = useCallback(
+    (nextView: UnlockedView): void => {
+      showView(nextView)
+      if (!pendingDraftRef.current) {
+        lockSaveStatusRef.current = 'idle'
+        return
+      }
+      window.requestAnimationFrame(() => {
+        void flushRef.current().then((success) => {
+          lockSaveStatusRef.current = success ? 'idle' : 'failed'
+          setHasPendingDraft(!success)
+        })
+      })
+    },
+    [setHasPendingDraft, showView]
+  )
+
+  const replaceLockedState = useCallback(
+    (nextView: UnlockedView): void => {
+      lockSaveStatusRef.current = 'idle'
+      lockSaveRef.current = null
+      setHasPendingDraft(false)
+      setWorkspaceKey((value) => value + 1)
+      showView(nextView)
+    },
+    [setHasPendingDraft, showView]
+  )
 
   useEffect(() => {
     if (!api) return
@@ -33,7 +225,7 @@ function App(): React.JSX.Element {
       .then(([nextView, nextAppInfo]) => {
         if (active) {
           setAppInfo(nextAppInfo)
-          updateView(nextView)
+          showView(nextView)
         }
       })
       .catch((reason: Error) => {
@@ -43,27 +235,72 @@ function App(): React.JSX.Element {
         if (active) setLoading(false)
       })
     const removeLockedListener = api.onLocked((nextView) => {
-      updateView(nextView as LockedView)
+      handleLocked(nextView as LockedView)
     })
-    const removeFlushListener = api.onFlushRequested(() => flushRef.current())
+    const removeLockRequestListener = api.onLockRequested(beginLockPreparation)
+    const removeFlushListener = api.onFlushRequested(handleFlushRequested)
     return () => {
       active = false
       removeLockedListener()
+      removeLockRequestListener()
       removeFlushListener()
     }
-  }, [api, updateView])
+  }, [api, beginLockPreparation, handleFlushRequested, handleLocked, showView])
 
   useEffect(() => {
     if (view?.access !== 'unlocked') return
     document.documentElement.dataset.theme = view.preferences.theme
-  }, [view])
+    api?.setIdleLock(view.pinEnabled ? view.preferences.idleLockMinutes : null)
+  }, [api, view])
+
+  useEffect(() => {
+    if (!api) return
+    const report = (): void => api.reportActivity()
+    const eventNames = ['click', 'keydown', 'input', 'scroll'] as const
+    for (const eventName of eventNames) document.addEventListener(eventName, report, true)
+
+    const originalConfirm = window.confirm.bind(window)
+    const originalPrompt = window.prompt.bind(window)
+    const originalAlert = window.alert.bind(window)
+    window.confirm = (...args): boolean => {
+      api.pauseIdleLock('native-message')
+      try {
+        return originalConfirm(...args)
+      } finally {
+        api.resumeIdleLock('native-message')
+      }
+    }
+    window.prompt = (...args): string | null => {
+      api.pauseIdleLock('native-message')
+      try {
+        return originalPrompt(...args)
+      } finally {
+        api.resumeIdleLock('native-message')
+      }
+    }
+    window.alert = (...args): void => {
+      api.pauseIdleLock('native-message')
+      try {
+        originalAlert(...args)
+      } finally {
+        api.resumeIdleLock('native-message')
+      }
+    }
+
+    return () => {
+      for (const eventName of eventNames) document.removeEventListener(eventName, report, true)
+      window.confirm = originalConfirm
+      window.prompt = originalPrompt
+      window.alert = originalAlert
+    }
+  }, [api])
 
   const startWriting = async (): Promise<void> => {
     if (!api) return
     setStarting(true)
     setError('')
     try {
-      updateView(await api.startWriting())
+      showView(await api.startWriting())
     } catch (reason) {
       setError((reason as Error).message)
     } finally {
@@ -74,7 +311,7 @@ function App(): React.JSX.Element {
   const restoreFromWelcome: JournalApi['restorePortableBackup'] = async (input) => {
     if (!api) return { status: 'cancelled' }
     const result = await api.restorePortableBackup(input)
-    if (result.status === 'restored') updateView(result.view)
+    if (result.status === 'restored') showView(result.view)
     return result
   }
 
@@ -154,22 +391,30 @@ function App(): React.JSX.Element {
     )
   }
 
-  if (view?.access === 'locked') {
-    return (
-      <LockScreen
-        appInfo={appInfo}
-        clearForgottenPin={api.clearForgottenPin}
-        onCleared={updateView}
-        onRestored={updateView}
-        onUnlock={api.unlock}
-        onUnlocked={updateView}
-        openExternalPage={api.openExternalPage}
-        restorePortableBackup={api.restorePortableBackup}
-      />
-    )
-  }
+  const workspace = workspaceView ? (
+    <JournalWorkspace
+      key={workspaceKey}
+      api={api}
+      appInfo={appInfo}
+      onErasureFailed={(reason) => {
+        flushRef.current = async (): Promise<boolean> => true
+        rememberWorkspace(null)
+        setView(null)
+        viewRef.current = null
+        setErasureFailure(reason.message)
+      }}
+      onPendingDraftReleased={() => setHasPendingDraft(false)}
+      onRequestLock={api.requestLock}
+      registerDiscard={registerDiscard}
+      registerFlush={registerFlush}
+      protectPendingDraft={protectPendingDraft}
+      suspended={view?.access === 'locked'}
+      view={workspaceView}
+      onViewChange={updateWorkspaceView}
+    />
+  ) : null
 
-  if (!view || view.screen === 'welcome') {
+  if (!view || (view.access === 'unlocked' && view.screen === 'welcome')) {
     return (
       <Welcome
         busy={starting}
@@ -180,20 +425,62 @@ function App(): React.JSX.Element {
     )
   }
 
+  const locked = view.access === 'locked'
   return (
-    <JournalWorkspace
-      api={api}
-      appInfo={appInfo}
-      key={(view as UnlockedView).selectedDate}
-      onErasureFailed={(reason) => {
-        flushRef.current = async (): Promise<boolean> => true
-        setView(null)
-        setErasureFailure(reason.message)
-      }}
-      registerFlush={registerFlush}
-      view={view as UnlockedView}
-      onViewChange={updateView}
-    />
+    <>
+      {workspace ? (
+        <div aria-hidden={locked || undefined} className="contents" hidden={locked}>
+          {workspace}
+        </div>
+      ) : null}
+      {locked ? (
+        <LockScreen
+          appInfo={appInfo}
+          hasPendingDraft={pendingDraft}
+          quitBlocked={quitBlocked}
+          clearForgottenPin={api.clearForgottenPin}
+          commitPortableBackupRestore={api.commitPortableBackupRestore}
+          onCleared={replaceLockedState}
+          onRestored={replaceLockedState}
+          onErasureFailed={(reason) => {
+            flushRef.current = async (): Promise<boolean> => true
+            discardRef.current = () => undefined
+            rememberWorkspace(null)
+            setHasPendingDraft(false)
+            setView(null)
+            viewRef.current = null
+            setErasureFailure(reason.message)
+          }}
+          onPendingDraftReleased={() => setHasPendingDraft(false)}
+          onUnlock={unlockWithPendingDraft}
+          onUnlocked={completeUnlock}
+          openExternalPage={api.openExternalPage}
+          preparePortableBackupRestore={api.preparePortableBackupRestore}
+          protectPendingDraft={protectPendingDraft}
+        />
+      ) : null}
+      {draftDecision ? (
+        <PendingDraftDialog
+          action={draftDecision.action}
+          concealDetails={Boolean(draftDecision.concealDetails)}
+          date={draftDecision.date}
+          pauseIdleLock={() => api.pauseIdleLock('pending-draft-decision')}
+          resumeIdleLock={() => api.resumeIdleLock('pending-draft-decision')}
+          trySave={
+            draftDecision.concealDetails
+              ? null
+              : async () => {
+                  const saved = await flushRef.current()
+                  if (saved) setHasPendingDraft(false)
+                  return saved
+                }
+          }
+          onCancel={() => finishDraftDecision('cancelled')}
+          onDiscard={() => finishDraftDecision('discard-authorized')}
+          onSaved={() => finishDraftDecision('saved')}
+        />
+      ) : null}
+    </>
   )
 }
 

@@ -3,6 +3,7 @@ import { RotateCcw, Shield } from 'lucide-react'
 import type { JournalApi } from '../../../../preload/index'
 import type { DeviceSnapshot, UnlockedView } from '../../types'
 import type { RunSettingAction } from './types'
+import type { ProtectPendingDraft } from '../../pending-draft'
 
 interface RecoverySettingsProps {
   api: JournalApi
@@ -11,6 +12,8 @@ interface RecoverySettingsProps {
   requireDurableDraft(): Promise<void>
   onError(message: string): void
   onRestore(view: UnlockedView): void
+  onPendingDraftReleased(): void
+  protectPendingDraft: ProtectPendingDraft
   showMessage(message: string): void
 }
 
@@ -21,6 +24,8 @@ export function RecoverySettings({
   requireDurableDraft,
   onError,
   onRestore,
+  onPendingDraftReleased,
+  protectPendingDraft,
   showMessage
 }: RecoverySettingsProps): React.JSX.Element {
   const [snapshots, setSnapshots] = useState<DeviceSnapshot[]>([])
@@ -57,17 +62,23 @@ export function RecoverySettings({
       ) {
         return
       }
-      await requireDurableDraft()
-      const result = await api.restorePortableBackup({ password: backupPassword })
-      if (result.status === 'restored') {
-        onRestore(result.view)
-        setSnapshots(await api.listDeviceSnapshots())
-        showMessage(
-          'Portable Backup restored. PIN Lock is off on this device; review it below if needed.'
-        )
-      } else {
+      const preparation = await api.preparePortableBackupRestore({ password: backupPassword })
+      if (preparation.status === 'cancelled') {
         showMessage('Restore cancelled.')
+        return
       }
+      const decision = await protectPendingDraft({ action: 'restore this Portable Backup' })
+      if (decision === 'cancelled') {
+        showMessage('Restore cancelled. The Pending Draft remains available.')
+        return
+      }
+      const result = await api.commitPortableBackupRestore(preparation.token)
+      onPendingDraftReleased()
+      onRestore(result.view)
+      setSnapshots(await api.listDeviceSnapshots())
+      showMessage(
+        'Portable Backup restored. PIN Lock is off on this device; review it below if needed.'
+      )
       setBackupPassword('')
     })
   }
@@ -81,8 +92,15 @@ export function RecoverySettings({
       return
     }
     run(`snapshot-${snapshot.id}`, async () => {
-      await requireDurableDraft()
-      onRestore(await api.restoreDeviceSnapshot(snapshot.id))
+      const preparation = await api.prepareDeviceSnapshotRestore(snapshot.id)
+      const decision = await protectPendingDraft({ action: 'restore this Device Snapshot' })
+      if (decision === 'cancelled') {
+        showMessage('Restore cancelled. The Pending Draft remains available.')
+        return
+      }
+      const restored = await api.commitDeviceSnapshotRestore(preparation.token)
+      onPendingDraftReleased()
+      onRestore(restored)
       setSnapshots(await api.listDeviceSnapshots())
       showMessage('Device Snapshot restored.')
     })

@@ -9,7 +9,7 @@ import {
 } from '../src/main/application/create-journal-application'
 import { decryptEnvelope, encryptEnvelope } from '../src/main/storage/encrypted-envelope'
 import { encryptPortableBackup } from '../src/main/storage/portable-backup'
-import type { RichTextDocument } from '../src/shared/journal-contract'
+import { emptyRichTextDocument, type RichTextDocument } from '../src/shared/journal-contract'
 
 const testDirectories: string[] = []
 
@@ -402,13 +402,72 @@ describe('InkPrompts Journal shell', () => {
     await application.startWriting()
 
     await expect(
-      application.updatePreferences({ theme: 'dark', spellcheck: false })
-    ).resolves.toEqual({ theme: 'dark', spellcheck: false })
+      application.updatePreferences({ theme: 'dark', spellcheck: false, idleLockMinutes: null })
+    ).resolves.toEqual({ theme: 'dark', spellcheck: false, idleLockMinutes: null })
 
     await expect(makeApplication(dataDirectory).bootstrap()).resolves.toMatchObject({
-      preferences: { theme: 'dark', spellcheck: false },
+      preferences: { theme: 'dark', spellcheck: false, idleLockMinutes: null },
       selectedEntry: null
     })
+  })
+
+  test('PIN Lock owns a durable idle timeout without reviving disabled settings', async () => {
+    const dataDirectory = await makeDataDirectory()
+    const application = makeApplication(dataDirectory)
+    await application.startWriting()
+
+    await expect(application.bootstrap()).resolves.toMatchObject({
+      preferences: { idleLockMinutes: null }
+    })
+    await application.configurePin({ pin: '123456', confirmation: '123456' })
+    await expect(application.bootstrap()).resolves.toMatchObject({
+      preferences: { idleLockMinutes: 15 }
+    })
+    await application.updatePreferences({
+      theme: 'system',
+      spellcheck: true,
+      idleLockMinutes: 'off'
+    })
+    await application.configurePin({
+      currentPin: '123456',
+      pin: '654321',
+      confirmation: '654321'
+    })
+    await expect(makeApplication(dataDirectory).unlock('654321')).resolves.toMatchObject({
+      preferences: { idleLockMinutes: 'off' }
+    })
+
+    await application.disablePin('654321')
+    await expect(application.bootstrap()).resolves.toMatchObject({
+      preferences: { idleLockMinutes: null }
+    })
+    await application.configurePin({ pin: '123456', confirmation: '123456' })
+    await expect(application.bootstrap()).resolves.toMatchObject({
+      preferences: { idleLockMinutes: 15 }
+    })
+  })
+
+  test.each([
+    { pin: false, expected: null },
+    { pin: true, expected: 15 }
+  ])('migrates an older idle-lock preference for PIN=$pin', async ({ pin, expected }) => {
+    const dataDirectory = await makeDataDirectory()
+    const application = makeApplication(dataDirectory)
+    await application.startWriting()
+    if (pin) await application.configurePin({ pin: '123456', confirmation: '123456' })
+
+    const protectedKey = await readFile(join(dataDirectory, 'journal.key'), 'utf8')
+    const key = keyProtector.unprotect(protectedKey)
+    const vaultPath = join(dataDirectory, 'journal.vault')
+    const legacyState = JSON.parse(decryptEnvelope(await readFile(vaultPath, 'utf8'), key))
+    delete legacyState.preferences.idleLockMinutes
+    await writeFile(vaultPath, encryptEnvelope(JSON.stringify(legacyState), key))
+
+    const restarted = makeApplication(dataDirectory)
+    const view = pin ? await restarted.unlock('123456') : await restarted.bootstrap()
+    expect(view).toMatchObject({ preferences: { idleLockMinutes: expected } })
+    const migrated = JSON.parse(decryptEnvelope(await readFile(vaultPath, 'utf8'), key))
+    expect(migrated.preferences.idleLockMinutes).toBe(expected)
   })
 
   test('Done for Today celebrates only the first durable completion and keeps the entry editable', async () => {
@@ -740,6 +799,57 @@ describe('InkPrompts Journal shell', () => {
     }
   )
 
+  test('Journal History lists every saved Daily Entry newest-first without inventing statistics', async () => {
+    const application = makeApplication(await makeDataDirectory())
+    await application.startWriting()
+    await application.saveEntry({
+      date: '2026-08-11',
+      title: 'Today',
+      content: firstSentence
+    })
+    await application.saveEntry({
+      date: '2026-08-10',
+      title: 'Clear this',
+      content: searchableSentence
+    })
+    await application.saveEntry({
+      date: '2026-08-10',
+      title: '',
+      content: emptyRichTextDocument()
+    })
+    await application.saveEntry({
+      date: '2026-07-01',
+      title: 'Title only',
+      content: emptyRichTextDocument()
+    })
+    await application.saveEntry({
+      date: '2025-12-31',
+      title: '',
+      content: searchableSentence
+    })
+
+    await expect(application.listJournalHistory()).resolves.toEqual([
+      {
+        date: '2026-08-11',
+        title: 'Today',
+        snippet: 'Today I chose to begin again.',
+        empty: false
+      },
+      { date: '2026-08-10', title: null, snippet: '', empty: true },
+      { date: '2026-07-01', title: 'Title only', snippet: '', empty: false },
+      {
+        date: '2025-12-31',
+        title: null,
+        snippet: 'Morning coffee made the apartment feel quiet.',
+        empty: false
+      }
+    ])
+
+    await application.configurePin({ pin: '123456', confirmation: '123456' })
+    await application.lock()
+    await expect(application.listJournalHistory()).rejects.toMatchObject({ code: 'LOCKED' })
+  })
+
   test('local search returns stable minimal results for title and rich-text body matches', async () => {
     const application = makeApplication(await makeDataDirectory())
     await application.startWriting()
@@ -759,7 +869,9 @@ describe('InkPrompts Journal shell', () => {
       {
         date: '2026-08-10',
         title: 'A quiet morning',
-        snippet: 'Morning coffee made the apartment feel quiet.'
+        snippet: 'Morning coffee made the apartment feel quiet.',
+        titleMatches: [{ start: 8, end: 12 }],
+        snippetMatches: [{ start: 0, end: 4 }]
       }
     ])
     expect(titleResults[0]).not.toHaveProperty('content')
@@ -789,6 +901,48 @@ describe('InkPrompts Journal shell', () => {
     await expect(application.search('morning')).rejects.toMatchObject({ code: 'LOCKED' })
   })
 
+  test('search returns every match range against the original title and snippet text', async () => {
+    const application = makeApplication(await makeDataDirectory())
+    await application.startWriting()
+    await application.saveEntry({
+      date: '2026-08-11',
+      title: 'Résumé résumé',
+      content: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Cafe\u0301 and CAFÉ stay <script>literal</script>.' }]
+          }
+        ]
+      }
+    })
+
+    await expect(application.search('RESUME')).resolves.toEqual([
+      {
+        date: '2026-08-11',
+        title: 'Résumé résumé',
+        snippet: 'Cafe\u0301 and CAFÉ stay <script>literal</script>.',
+        titleMatches: [
+          { start: 0, end: 6 },
+          { start: 7, end: 13 }
+        ],
+        snippetMatches: []
+      }
+    ])
+    await expect(application.search('cafe')).resolves.toMatchObject([
+      {
+        snippet: 'Cafe\u0301 and CAFÉ stay <script>literal</script>.',
+        titleMatches: [],
+        snippetMatches: [
+          { start: 0, end: 5 },
+          { start: 10, end: 14 }
+        ]
+      }
+    ])
+  })
+
   test('Device Snapshots deduplicate daily saves and recover an explicitly deleted entry', async () => {
     const application = makeApplication(await makeDataDirectory())
     await application.startWriting()
@@ -810,10 +964,17 @@ describe('InkPrompts Journal shell', () => {
     )
     expect(beforeDelete).toBeDefined()
 
-    await expect(application.restoreDeviceSnapshot(beforeDelete!.id)).resolves.toMatchObject({
-      selectedEntry: { date: '2026-08-11', title: 'Updated' },
-      entryDates: ['2026-08-11']
+    const preparation = await application.prepareDeviceSnapshotRestore(beforeDelete!.id)
+    expect(preparation).toMatchObject({ status: 'ready' })
+    await expect(application.openDate('2026-08-11')).resolves.toMatchObject({
+      selectedEntry: null
     })
+    await expect(application.commitDeviceSnapshotRestore(preparation.token)).resolves.toMatchObject(
+      {
+        selectedEntry: { date: '2026-08-11', title: 'Updated' },
+        entryDates: ['2026-08-11']
+      }
+    )
     await expect(application.listDeviceSnapshots()).resolves.toHaveLength(3)
   })
 
@@ -833,7 +994,7 @@ describe('InkPrompts Journal shell', () => {
     await source.saveEntry({ date: '2026-08-11', title: 'Portable', content: firstSentence })
     await source.completeToday()
     await source.saveHabitRecipe({ anchor: 'I close my laptop', enabled: true })
-    await source.updatePreferences({ theme: 'dark', spellcheck: false })
+    await source.updatePreferences({ theme: 'dark', spellcheck: false, idleLockMinutes: null })
 
     await expect(
       source.createPortableBackup({
@@ -851,18 +1012,23 @@ describe('InkPrompts Journal shell', () => {
         return portableBackup!
       }
     })
-    await expect(
-      destination.restorePortableBackup({ password: 'independent backup password' })
-    ).resolves.toMatchObject({
-      status: 'restored',
-      pinReviewRequired: true,
-      view: {
-        selectedEntry: { title: 'Portable', completedAt: '2026-08-11T01:00:00.000Z' },
-        habitRecipe: { anchor: 'I close my laptop', enabled: true },
-        preferences: { theme: 'dark', spellcheck: false },
-        pinEnabled: false
-      }
+    const preparation = await destination.preparePortableBackupRestore({
+      password: 'independent backup password'
     })
+    expect(preparation).toMatchObject({ status: 'ready' })
+    await expect(destination.bootstrap()).resolves.toMatchObject({ screen: 'welcome' })
+    await expect(destination.commitPortableBackupRestore(preparation.token)).resolves.toMatchObject(
+      {
+        status: 'restored',
+        pinReviewRequired: true,
+        view: {
+          selectedEntry: { title: 'Portable', completedAt: '2026-08-11T01:00:00.000Z' },
+          habitRecipe: { anchor: 'I close my laptop', enabled: true },
+          preferences: { theme: 'dark', spellcheck: false },
+          pinEnabled: false
+        }
+      }
+    )
     await expect(destination.search('portable')).resolves.toMatchObject([{ date: '2026-08-11' }])
   })
 
@@ -989,7 +1155,7 @@ describe('InkPrompts Journal shell', () => {
     })
     await application.completeToday()
     await application.saveHabitRecipe({ anchor: 'I close my laptop', enabled: true })
-    await application.updatePreferences({ theme: 'dark', spellcheck: false })
+    await application.updatePreferences({ theme: 'dark', spellcheck: false, idleLockMinutes: null })
 
     const protectedKey = await readFile(join(dataDirectory, 'journal.key'), 'utf8')
     const key = keyProtector.unprotect(protectedKey)
@@ -1122,6 +1288,40 @@ describe('InkPrompts Journal shell', () => {
     await expect(readFile(snapshotPath, 'utf8')).resolves.toBe('truncated')
   })
 
+  test('a prepared Device Snapshot remains retryable when replacement fails', async () => {
+    const dataDirectory = await makeDataDirectory()
+    let failVaultWrite = false
+    const application = makeApplication(dataDirectory, {
+      async write(path, data) {
+        if (failVaultWrite && path.endsWith('journal.vault')) throw new Error('disk full')
+        await writeFile(path, data, { mode: 0o600 })
+      }
+    })
+    await application.startWriting()
+    await application.saveEntry({
+      date: '2026-08-11',
+      title: 'Snapshot source',
+      content: firstSentence
+    })
+    await application.deleteEntry('2026-08-11')
+    const snapshot = (await application.listDeviceSnapshots()).find(
+      (candidate) => candidate.reason === 'before-delete'
+    )!
+    const preparation = await application.prepareDeviceSnapshotRestore(snapshot.id)
+
+    failVaultWrite = true
+    await expect(application.commitDeviceSnapshotRestore(preparation.token)).rejects.toMatchObject({
+      code: 'SAVE_FAILED'
+    })
+    await expect(application.openDate('2026-08-11')).resolves.toMatchObject({ selectedEntry: null })
+    failVaultWrite = false
+    await expect(application.commitDeviceSnapshotRestore(preparation.token)).resolves.toMatchObject(
+      {
+        selectedEntry: { title: 'Snapshot source' }
+      }
+    )
+  })
+
   test('wrong passwords and tampered Portable Backups preserve the current vault', async () => {
     let backup: Buffer | undefined
     const source = makeApplication(await makeDataDirectory(), undefined, undefined, {
@@ -1166,6 +1366,74 @@ describe('InkPrompts Journal shell', () => {
     await expect(destination.openDate('2026-08-11')).resolves.toMatchObject({
       selectedEntry: { title: 'Keep this' }
     })
+  })
+
+  test('a validated Portable Backup does not replace local state until commit succeeds', async () => {
+    const backupState = {
+      schemaVersion: 2,
+      onboarded: true,
+      entries: {
+        '2026-08-11': {
+          date: '2026-08-11',
+          title: 'Prepared backup',
+          content: firstSentence,
+          createdAt: '2026-08-11T01:00:00.000Z',
+          updatedAt: '2026-08-11T01:00:00.000Z',
+          completedAt: null
+        }
+      },
+      preferences: { theme: 'system', spellcheck: true, idleLockMinutes: null },
+      habitRecipe: null,
+      habitRecipeInviteDismissed: false,
+      habitRecipeReviewAsked: false,
+      pinLock: null,
+      lastDailySnapshotDate: null,
+      pinReviewRequired: false
+    }
+    const backup = encryptPortableBackup(JSON.stringify(backupState), 'portable password')
+    let failVaultWrite = false
+    const application = makeApplication(
+      await makeDataDirectory(),
+      {
+        async write(path, data) {
+          if (failVaultWrite && path.endsWith('journal.vault')) throw new Error('disk full')
+          await writeFile(path, data, { mode: 0o600 })
+        }
+      },
+      undefined,
+      {
+        async savePortableBackup() {
+          return false
+        },
+        async openPortableBackup() {
+          return backup
+        }
+      }
+    )
+    await application.startWriting()
+    await application.saveEntry({
+      date: '2026-08-11',
+      title: 'Local state',
+      content: firstSentence
+    })
+    const preparation = await application.preparePortableBackupRestore({
+      password: 'portable password'
+    })
+    if (preparation.status !== 'ready') throw new Error('Expected a validated backup')
+
+    failVaultWrite = true
+    await expect(application.commitPortableBackupRestore(preparation.token)).rejects.toMatchObject({
+      code: 'SAVE_FAILED'
+    })
+    await expect(application.openDate('2026-08-11')).resolves.toMatchObject({
+      selectedEntry: { title: 'Local state' }
+    })
+    failVaultWrite = false
+    await expect(application.commitPortableBackupRestore(preparation.token)).resolves.toMatchObject(
+      {
+        view: { selectedEntry: { title: 'Prepared backup' } }
+      }
+    )
   })
 
   test('distinguishes an unsupported backup schema from damaged authenticated content', async () => {

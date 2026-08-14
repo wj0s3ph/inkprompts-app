@@ -22,7 +22,7 @@ const view = {
     question: 'What do you want to remember about today?',
     placeholder: 'Right now, I...'
   },
-  preferences: { theme: 'system', spellcheck: true },
+  preferences: { theme: 'system', spellcheck: true, idleLockMinutes: 15 },
   habitRecipe: null,
   pinEnabled: true,
   pinReviewRequired: false
@@ -63,9 +63,11 @@ describe('release Settings', () => {
         flushPending: async () => true,
         onClose: () => undefined,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
         onRestore: () => undefined,
         onViewChange: () => undefined,
         open: true,
+        protectPendingDraft: async () => 'saved',
         view
       })
     )
@@ -104,9 +106,9 @@ describe('release Settings', () => {
     expect(openExternalPage.mock.calls).toEqual([['website'], ['privacy'], ['terms'], ['support']])
   })
 
-  test('can explicitly skip backup without trying to save an unsavable draft', async () => {
+  test('can explicitly authorize discarding an unsavable draft before erasure', async () => {
     const user = userEvent.setup()
-    const flushPending = vi.fn(async () => false)
+    const protectPendingDraft = vi.fn(async () => 'discard-authorized' as const)
     const createPortableBackup = vi.fn()
     const eraseJournalVault = vi.fn(async () => ({ screen: 'welcome' }))
     const onErased = vi.fn()
@@ -116,9 +118,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending,
         onErased,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft,
         run: (_name, action) => void action(),
         view
       })
@@ -132,7 +135,7 @@ describe('release Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Erase Journal Vault' }))
 
     await waitFor(() => expect(eraseJournalVault).toHaveBeenCalled())
-    expect(flushPending).not.toHaveBeenCalled()
+    expect(protectPendingDraft).toHaveBeenCalledWith({ action: 'erase the Journal Vault' })
     expect(createPortableBackup).not.toHaveBeenCalled()
     expect(eraseJournalVault).toHaveBeenCalledWith({ confirmation: 'ERASE', pin: '123456' })
     expect(onErased).toHaveBeenCalled()
@@ -156,12 +159,13 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => {
+        protectPendingDraft: async () => {
           order.push('save')
-          return true
+          return 'saved'
         },
         onErased: () => undefined,
         onErasureFailed: () => undefined,
+        onPendingDraftReleased: () => undefined,
         run: (_name, action) => void action(),
         view
       })
@@ -199,9 +203,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => true,
         onErased: () => undefined,
         onErasureFailed,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft: async () => 'saved',
         run: (_name, action) => void action().catch(() => undefined),
         view
       })
@@ -232,9 +237,10 @@ describe('release Settings', () => {
       createElement(VaultErasureSettings, {
         api,
         busy: '',
-        flushPending: async () => true,
         onErased: () => undefined,
         onErasureFailed,
+        onPendingDraftReleased: () => undefined,
+        protectPendingDraft: async () => 'saved',
         run: (_name, action) => void action().catch(() => undefined),
         view
       })

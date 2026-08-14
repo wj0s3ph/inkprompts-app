@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -16,6 +16,8 @@ import type { RichTextDocument, RichTextNode } from '../../../shared/journal-con
 interface RichTextEditorProps {
   content: RichTextDocument
   editable: boolean
+  autoFocus: boolean
+  suspended: boolean
   focusKey: string
   placeholder?: string
   spellcheck: boolean
@@ -25,11 +27,14 @@ interface RichTextEditorProps {
 export function RichTextEditor({
   content,
   editable,
+  autoFocus,
+  suspended,
   focusKey,
   placeholder,
   spellcheck,
   onChange
 }: RichTextEditorProps): React.JSX.Element {
+  const restoreFocusRef = useRef(false)
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -68,10 +73,23 @@ export function RichTextEditor({
   }, [editable, editor])
 
   useEffect(() => {
-    if (!editor || !editable) return
+    if (!editor) return
+    if (suspended) {
+      restoreFocusRef.current = editor.isFocused
+      editor.commands.blur()
+      return
+    }
+    if (!restoreFocusRef.current) return
+    restoreFocusRef.current = false
+    const frame = window.requestAnimationFrame(() => editor.commands.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [editor, suspended])
+
+  useEffect(() => {
+    if (!editor || !editable || !autoFocus) return
     const frame = window.requestAnimationFrame(() => editor.commands.focus('start'))
     return () => window.cancelAnimationFrame(frame)
-  }, [editable, editor, focusKey])
+  }, [autoFocus, editable, editor, focusKey])
 
   useEffect(() => {
     if (!editor) return

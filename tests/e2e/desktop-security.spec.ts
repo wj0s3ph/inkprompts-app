@@ -1086,7 +1086,52 @@ test('keeps the editor actions inside a small laptop window', async () => {
   }
 })
 
-test('renders the editor controls inside a ruled open notebook', async () => {
+test('keeps Settings reachable inside the minimum-height window', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'inkprompts-settings-layout-e2e-'))
+  let application: ElectronApplication | undefined
+
+  try {
+    const journal = await launchJournal(userData)
+    application = journal.application
+    const storage = await application.evaluate(({ safeStorage }) => ({
+      available: safeStorage.isEncryptionAvailable(),
+      backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'system'
+    }))
+    test.skip(
+      !storage.available || storage.backend === 'basic_text',
+      'Secure storage is unavailable'
+    )
+
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(1200, 560)
+    })
+    await expect.poll(() => journal.page.evaluate(() => window.innerHeight)).toBe(560)
+    await journal.page.getByRole('button', { name: 'Start writing' }).click()
+
+    const viewport = await journal.page.evaluate(() => ({
+      height: window.innerHeight,
+      width: window.innerWidth
+    }))
+    const settingsButton = journal.page.getByRole('button', { name: 'Settings' })
+    const buttonBounds = await settingsButton.boundingBox()
+    expect(buttonBounds, 'Settings should have visible layout bounds').not.toBeNull()
+    expect(buttonBounds!.y).toBeGreaterThanOrEqual(0)
+    expect(buttonBounds!.y + buttonBounds!.height).toBeLessThanOrEqual(viewport.height)
+
+    await settingsButton.click()
+    const dialogBounds = await journal.page.getByRole('dialog', { name: 'Settings' }).boundingBox()
+    expect(dialogBounds, 'Settings dialog should have visible layout bounds').not.toBeNull()
+    expect(dialogBounds!.x).toBeGreaterThanOrEqual(0)
+    expect(dialogBounds!.y).toBeGreaterThanOrEqual(0)
+    expect(dialogBounds!.x + dialogBounds!.width).toBeLessThanOrEqual(viewport.width)
+    expect(dialogBounds!.y + dialogBounds!.height).toBeLessThanOrEqual(viewport.height)
+  } finally {
+    await stopJournal(application)
+    await removeUserData(userData)
+  }
+})
+
+test('renders the editor controls on ruled paper without a simulated center seam', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'inkprompts-notebook-e2e-'))
   let application: ElectronApplication | undefined
 
@@ -1131,7 +1176,7 @@ test('renders the editor controls inside a ruled open notebook', async () => {
     expect(visualTreatment.borderRadius).toBeGreaterThanOrEqual(16)
     expect(visualTreatment.lines).toContain('repeating-linear-gradient')
     expect(visualTreatment.margin).not.toBe('none')
-    expect(visualTreatment.seam).not.toBe('none')
+    expect(visualTreatment.seam).toBe('none')
   } finally {
     await stopJournal(application)
     await removeUserData(userData)

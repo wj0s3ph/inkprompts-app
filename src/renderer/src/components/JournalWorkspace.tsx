@@ -472,7 +472,7 @@ export function JournalWorkspace({
                 onSelect={(date) => void navigate(date)}
               />
             )}
-            <div className="mt-auto space-y-1 pt-6">
+            <div className="sidebar-footer space-y-1 pt-3">
               {view.pinEnabled ? (
                 <button
                   className="sidebar-action"

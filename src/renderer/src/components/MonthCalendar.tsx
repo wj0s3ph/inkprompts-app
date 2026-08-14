@@ -61,7 +61,7 @@ export function MonthCalendar({
   }
 
   return (
-    <section aria-label="Journal calendar" className="mt-5">
+    <section aria-label="Journal calendar" className="journal-calendar mt-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">{monthLabel}</h2>
         <div className="flex gap-1">

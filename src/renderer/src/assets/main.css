@@ -27,8 +27,6 @@
   --notebook-edge: oklch(0.84 0.022 82);
   --notebook-rule: oklch(0.78 0.026 250 / 62%);
   --notebook-margin: oklch(0.55 0.19 264 / 92%);
-  --notebook-seam-dark: oklch(0.34 0.025 72 / 12%);
-  --notebook-seam-light: oklch(1 0 0 / 76%);
   --notebook-shadow:
     0 18px 48px oklch(0.235 0.018 255 / 13%), 0 2px 5px oklch(0.235 0.018 255 / 12%);
   --notebook-line-height: 2.45rem;
@@ -65,8 +63,6 @@
   --notebook-edge: oklch(0.34 0.019 255);
   --notebook-rule: oklch(0.43 0.027 255 / 54%);
   --notebook-margin: oklch(0.62 0.16 264 / 88%);
-  --notebook-seam-dark: oklch(0.05 0.01 255 / 42%);
-  --notebook-seam-light: oklch(0.82 0.012 255 / 6%);
   --notebook-shadow: 0 20px 58px oklch(0.06 0.01 255 / 52%), 0 2px 5px oklch(0.06 0.01 255 / 38%);
 }
 
@@ -98,8 +94,6 @@
     --notebook-edge: oklch(0.34 0.019 255);
     --notebook-rule: oklch(0.43 0.027 255 / 54%);
     --notebook-margin: oklch(0.62 0.16 264 / 88%);
-    --notebook-seam-dark: oklch(0.05 0.01 255 / 42%);
-    --notebook-seam-light: oklch(0.82 0.012 255 / 6%);
     --notebook-shadow: 0 20px 58px oklch(0.06 0.01 255 / 52%), 0 2px 5px oklch(0.06 0.01 255 / 38%);
   }
 }
@@ -331,6 +325,17 @@ select:disabled {
   align-items: center;
 }
 
+.journal-calendar {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.sidebar-footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
 .brand-button {
   display: inline-flex;
   min-height: 44px;
@@ -543,20 +548,11 @@ select:disabled {
   background:
     radial-gradient(circle at 23% 3%, var(--notebook-paper-glow), transparent 38%),
     radial-gradient(circle at 76% 8%, var(--notebook-paper-glow), transparent 36%),
-    linear-gradient(
-      90deg,
-      var(--notebook-paper) 0%,
-      var(--notebook-paper) 49.62%,
-      var(--notebook-paper-alt) 49.96%,
-      var(--notebook-paper-alt) 50.18%,
-      var(--notebook-paper) 50.55%,
-      var(--notebook-paper) 100%
-    );
+    var(--notebook-paper);
   box-shadow: var(--notebook-shadow);
 }
 
-.journal-notebook::before,
-.journal-notebook::after {
+.journal-notebook::before {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -569,21 +565,6 @@ select:disabled {
   left: clamp(3.75rem, 7.55%, 5.5rem);
   width: 1.5px;
   background: var(--notebook-margin);
-}
-
-.journal-notebook::after {
-  z-index: 3;
-  left: 50%;
-  width: 1.15rem;
-  transform: translateX(-50%);
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--notebook-seam-dark) 34%,
-    var(--notebook-seam-light) 49%,
-    var(--notebook-seam-dark) 62%,
-    transparent
-  );
 }
 
 .journal-notebook-content {
@@ -1290,10 +1271,6 @@ select:disabled {
 
   .journal-notebook::before {
     left: 2.65rem;
-  }
-
-  .journal-notebook::after {
-    display: none;
   }
 
   .journal-notebook-content {

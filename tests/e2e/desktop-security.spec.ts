@@ -1131,6 +1131,54 @@ test('keeps Settings reachable inside the minimum-height window', async () => {
   }
 })
 
+test('keeps direct date navigation visible above the scrollable calendar grid', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'inkprompts-calendar-layout-e2e-'))
+  let application: ElectronApplication | undefined
+
+  try {
+    const journal = await launchJournal(userData)
+    application = journal.application
+    const storage = await application.evaluate(({ safeStorage }) => ({
+      available: safeStorage.isEncryptionAvailable(),
+      backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'system'
+    }))
+    test.skip(
+      !storage.available || storage.backend === 'basic_text',
+      'Secure storage is unavailable'
+    )
+
+    await application.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(1200, 560)
+    })
+    await expect.poll(() => journal.page.evaluate(() => window.innerHeight)).toBe(560)
+    await journal.page.getByRole('button', { name: 'Start writing' }).click()
+
+    const calendar = journal.page.getByRole('region', { name: 'Journal calendar' })
+    const goToDate = calendar.getByRole('button', { name: /Go to date/ })
+    await expect(goToDate).toContainText(/[A-Z][a-z]+ 20\d{2}/)
+    expect(
+      await goToDate.evaluate((button) => {
+        const calendarRegion = button.closest('[aria-label="Journal calendar"]')
+        if (!calendarRegion) return false
+        const buttonBounds = button.getBoundingClientRect()
+        const calendarBounds = calendarRegion.getBoundingClientRect()
+        return (
+          buttonBounds.top >= calendarBounds.top &&
+          buttonBounds.bottom <= calendarBounds.bottom &&
+          buttonBounds.bottom <= window.innerHeight &&
+          calendarRegion.scrollTop === 0
+        )
+      })
+    ).toBe(true)
+
+    await goToDate.click()
+    await expect(journal.page.getByRole('dialog', { name: 'Go to date' })).toBeVisible()
+  } finally {
+    await stopJournal(application)
+    await removeUserData(userData)
+  }
+})
+
 test('renders the editor controls on ruled paper without a simulated center seam', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'inkprompts-notebook-e2e-'))
   let application: ElectronApplication | undefined
@@ -1569,7 +1617,7 @@ test('production renderer is isolated, offline, and restores the last acknowledg
     const calendar = first.page.getByRole('region', { name: 'Journal calendar' })
     const previousMonth = calendar.getByRole('button', { name: 'Previous month' })
     await previousMonth.click()
-    const pastDate = calendar.getByRole('button').nth(2)
+    const pastDate = calendar.locator('.calendar-day').first()
     await pastDate.click()
     await expect(first.page.getByText('Daily Entry', { exact: true })).toBeVisible()
     const today = first.page.getByRole('button', { name: 'Today', exact: true })

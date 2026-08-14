@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { CalendarSearch, ChevronLeft, ChevronRight } from 'lucide-react'
 import { firstDayForLocale } from '../calendar-week-start'
 
 interface MonthCalendarProps {
@@ -62,76 +62,79 @@ export function MonthCalendar({
 
   return (
     <section aria-label="Journal calendar" className="journal-calendar mt-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{monthLabel}</h2>
-        <div className="flex gap-1">
-          <button
-            className="icon-button"
-            aria-label="Previous month"
-            type="button"
-            onClick={() => moveMonth(-1)}
-          >
-            <ChevronLeft aria-hidden="true" size={18} />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="Next month"
-            type="button"
-            onClick={() => moveMonth(1)}
-          >
-            <ChevronRight aria-hidden="true" size={18} />
-          </button>
+      <div className="calendar-toolbar">
+        <button
+          className="icon-button"
+          aria-label="Previous month"
+          type="button"
+          onClick={() => moveMonth(-1)}
+        >
+          <ChevronLeft aria-hidden="true" size={18} />
+        </button>
+        <button
+          aria-haspopup="dialog"
+          className="calendar-date-trigger"
+          type="button"
+          onClick={() => {
+            setDateValue(selectedDate)
+            setDatePickerOpen(true)
+          }}
+        >
+          <span className="calendar-month-label">{monthLabel}</span>
+          <span className="calendar-date-trigger-label">
+            <CalendarSearch aria-hidden="true" size={13} /> Go to date
+          </span>
+        </button>
+        <button
+          className="icon-button"
+          aria-label="Next month"
+          type="button"
+          onClick={() => moveMonth(1)}
+        >
+          <ChevronRight aria-hidden="true" size={18} />
+        </button>
+      </div>
+      <div className="calendar-grid-scroll">
+        <div
+          className="grid grid-cols-7 text-center text-[11px] font-semibold text-[var(--text-subtle)]"
+          aria-label="Weekdays"
+          role="row"
+        >
+          {weekdays.map((day) => (
+            <span aria-label={day.name} className="py-1" key={day.name} role="columnheader">
+              {day.label}
+            </span>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-0.5">
+          {Array.from({ length: firstWeekday }).map((_, index) => (
+            <span key={`blank-${index}`} />
+          ))}
+          {Array.from({ length: days }, (_, index) => {
+            const date = `${visibleMonth}-${String(index + 1).padStart(2, '0')}`
+            const selected = date === selectedDate
+            const isToday = date === today
+            return (
+              <button
+                key={date}
+                aria-current={selected ? 'date' : undefined}
+                aria-label={new Intl.DateTimeFormat('en', {
+                  dateStyle: 'full',
+                  timeZone: 'UTC'
+                }).format(new Date(`${date}T00:00:00.000Z`))}
+                className={`calendar-day ${selected ? 'calendar-day-selected' : ''} ${isToday ? 'calendar-day-today' : ''}`}
+                type="button"
+                onClick={() => onSelect(date)}
+              >
+                <span>{index + 1}</span>
+                {markedDates.has(date) ? (
+                  <span aria-label="Has Daily Entry" className="entry-dot" />
+                ) : null}
+              </button>
+            )
+          })}
         </div>
       </div>
-      <div
-        className="mt-3 grid grid-cols-7 text-center text-[11px] font-semibold text-[var(--text-subtle)]"
-        aria-label="Weekdays"
-        role="row"
-      >
-        {weekdays.map((day) => (
-          <span aria-label={day.name} className="py-1" key={day.name} role="columnheader">
-            {day.label}
-          </span>
-        ))}
-      </div>
-      <div className="grid grid-cols-7 gap-0.5">
-        {Array.from({ length: firstWeekday }).map((_, index) => (
-          <span key={`blank-${index}`} />
-        ))}
-        {Array.from({ length: days }, (_, index) => {
-          const date = `${visibleMonth}-${String(index + 1).padStart(2, '0')}`
-          const selected = date === selectedDate
-          const isToday = date === today
-          return (
-            <button
-              key={date}
-              aria-current={selected ? 'date' : undefined}
-              aria-label={new Intl.DateTimeFormat('en', {
-                dateStyle: 'full',
-                timeZone: 'UTC'
-              }).format(new Date(`${date}T00:00:00.000Z`))}
-              className={`calendar-day ${selected ? 'calendar-day-selected' : ''}`}
-              type="button"
-              onClick={() => onSelect(date)}
-            >
-              <span className={isToday ? 'font-bold' : undefined}>{index + 1}</span>
-              {markedDates.has(date) ? (
-                <span aria-label="Has Daily Entry" className="entry-dot" />
-              ) : null}
-            </button>
-          )
-        })}
-      </div>
-      <button
-        className="text-button mt-3 w-full"
-        type="button"
-        onClick={() => {
-          setDateValue(selectedDate)
-          setDatePickerOpen(true)
-        }}
-      >
-        Go to date
-      </button>
       <dialog
         aria-labelledby="go-to-date-title"
         className="prompt-dialog"

@@ -16,7 +16,8 @@ async function launchJournal(
   userData: string,
   rendererRequests?: string[],
   language?: string,
-  idleLockTestMs?: number
+  idleLockTestMs?: number,
+  durableWriteTestMs?: number
 ): Promise<{ application: ElectronApplication; page: Page }> {
   const executablePath = process.env.INKPROMPTS_EXECUTABLE_PATH
   const application = await electron.launch({
@@ -27,7 +28,10 @@ async function launchJournal(
     env: {
       ...process.env,
       NODE_ENV: 'production',
-      ...(idleLockTestMs ? { INKPROMPTS_IDLE_LOCK_TEST_MS: String(idleLockTestMs) } : {})
+      ...(idleLockTestMs ? { INKPROMPTS_IDLE_LOCK_TEST_MS: String(idleLockTestMs) } : {}),
+      ...(durableWriteTestMs
+        ? { INKPROMPTS_DURABLE_WRITE_TEST_MS: String(durableWriteTestMs) }
+        : {})
     }
   })
   if (rendererRequests) await installNetworkObservation(application)
@@ -226,6 +230,8 @@ test('browses every saved Daily Entry through Journal History', async () => {
     await openDate(localDateWithOffset(-40))
     await expect(body).toBeFocused()
     await title.fill('Archive title')
+    const literalMarkup = '<img src=x onerror="window.hacked=true"> remains literal.'
+    await body.fill(literalMarkup)
     await expect(journal.page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible()
 
     await journal.page.getByRole('tab', { name: 'Entries' }).click()
@@ -241,7 +247,15 @@ test('browses every saved Daily Entry through Journal History', async () => {
     const searchResults = journal.page.getByRole('region', { name: 'Search results' })
     await expect(searchResults).toBeVisible()
     await expect(searchResults.locator('mark')).toHaveText('Archive')
-    await search.fill('')
+    await search.fill('onerror')
+    const markupResult = searchResults.getByRole('button')
+    await expect(markupResult.locator('mark')).toHaveText('onerror')
+    await markupResult.press('Enter')
+    await expect(body).toContainText(literalMarkup)
+    await expect(journal.page.locator('img[src="x"]')).toHaveCount(0)
+    await expect(journal.page.evaluate(() => Reflect.has(window, 'hacked'))).resolves.toBe(false)
+
+    await journal.page.getByRole('tab', { name: 'Entries' }).click()
     await expect(history).toBeVisible()
 
     await history.getByText('Empty entry').click()
@@ -356,6 +370,45 @@ test('restores a visible normal or maximized window without restoring fullscreen
       return { fullscreen: window.isFullScreen(), visible }
     })
     expect(recoveredState).toEqual({ fullscreen: false, visible: true })
+
+    await application.close()
+    application = undefined
+    await writeFile(join(userData, 'display-preferences.json'), '{not valid json')
+    const recoveredFromCorrupt = await launchJournal(userData)
+    application = recoveredFromCorrupt.application
+    await expect
+      .poll(() =>
+        recoveredFromCorrupt.application.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0].getBounds()
+        )
+      )
+      .toMatchObject({ width: expect.any(Number), height: expect.any(Number) })
+
+    await application.close()
+    application = undefined
+    await writeFile(
+      join(userData, 'display-preferences.json'),
+      JSON.stringify({
+        version: 1,
+        bounds: { x: -100_000, y: -100_000, width: 100_000, height: 100_000 },
+        maximized: false
+      })
+    )
+    const clamped = await launchJournal(userData)
+    application = clamped.application
+    const clampedState = await application.evaluate(({ BrowserWindow, screen }) => {
+      const bounds = BrowserWindow.getAllWindows()[0].getBounds()
+      const workArea = screen.getPrimaryDisplay().workArea
+      return {
+        contained:
+          bounds.x >= workArea.x &&
+          bounds.y >= workArea.y &&
+          bounds.x + bounds.width <= workArea.x + workArea.width &&
+          bounds.y + bounds.height <= workArea.y + workArea.height,
+        respectsMinimum: bounds.width >= 720 && bounds.height >= 560
+      }
+    })
+    expect(clampedState).toEqual({ contained: true, respectsMinimum: true })
   } finally {
     await stopJournal(application)
     await removeUserData(userData)
@@ -391,7 +444,17 @@ test('locks immediately and restores an in-memory Pending Draft after save failu
     await chmod(userData, 0o500)
     const body = journal.page.getByRole('textbox', { name: 'Daily Entry body' })
     await body.fill('Unsaved words stay behind the lock.')
-    await expect(journal.page.getByRole('status').filter({ hasText: /^Saving$/ })).toBeVisible()
+    const currentDate = await journal.page.getByRole('heading', { level: 1 }).textContent()
+    await journal.page.getByRole('button', { name: 'Go to date' }).click()
+    await journal.page
+      .getByRole('textbox', { name: 'Date', exact: true })
+      .fill(localDateWithOffset(-1))
+    await journal.page.getByRole('button', { name: 'Open date' }).click()
+    await expect(journal.page.getByRole('heading', { level: 1 })).toHaveText(currentDate!)
+    await expect(journal.page.getByRole('alert')).toContainText(/save/i)
+    await body.click()
+    await body.press('End')
+    await body.press('Shift+ArrowLeft')
     await journal.page.getByRole('button', { name: 'Lock', exact: true }).click()
 
     await expect(
@@ -414,8 +477,16 @@ test('locks immediately and restores an in-memory Pending Draft after save failu
     await unlockPin.press('Enter')
 
     await expect(body).toContainText('Unsaved words stay behind the lock.')
+    await expect(body).toBeFocused()
+    await expect
+      .poll(() => journal.page.evaluate(() => window.getSelection()?.toString()))
+      .toBe('.')
     await expect(journal.page.getByRole('alert')).toContainText(/save/i)
     await expect(journal.page.getByRole('button', { name: 'Try again' })).toBeVisible()
+    await body.press('ControlOrMeta+z')
+    await expect(body).not.toContainText('Unsaved words stay behind the lock.')
+    await body.press('ControlOrMeta+Shift+z')
+    await expect(body).toContainText('Unsaved words stay behind the lock.')
     await journal.page.waitForTimeout(700)
 
     await chmod(userData, 0o700)
@@ -423,6 +494,58 @@ test('locks immediately and restores an in-memory Pending Draft after save failu
     await expect(journal.page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible()
   } finally {
     await chmod(userData, 0o700).catch(() => undefined)
+    await stopJournal(application)
+    await removeUserData(userData)
+  }
+})
+
+test('shows PIN Lock while an in-flight durable save finishes successfully', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'inkprompts-in-flight-lock-e2e-'))
+  let application: ElectronApplication | undefined
+
+  try {
+    const setup = await launchJournal(userData)
+    application = setup.application
+    const storage = await application.evaluate(({ safeStorage }) => ({
+      available: safeStorage.isEncryptionAvailable(),
+      backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'system'
+    }))
+    test.skip(
+      !storage.available || storage.backend === 'basic_text',
+      'Secure storage is unavailable'
+    )
+    await setup.page.getByRole('button', { name: 'Start writing' }).click()
+    await setup.page.getByRole('button', { name: 'Settings' }).click()
+    await setup.page.getByLabel('New 6-digit PIN').fill('654321')
+    await setup.page.getByLabel('Confirm new PIN').fill('654321')
+    await setup.page.getByRole('button', { name: 'Enable PIN Lock' }).click()
+    await application.close()
+    application = undefined
+
+    const journal = await launchJournal(userData, undefined, undefined, undefined, 1_500)
+    application = journal.application
+    const pin = journal.page.getByRole('textbox', { name: 'PIN' })
+    await pin.fill('654321')
+    await pin.press('Enter')
+    const body = journal.page.getByRole('textbox', { name: 'Daily Entry body' })
+    await body.fill('This durable save completes behind PIN Lock.')
+    await journal.page.waitForTimeout(700)
+
+    const lockStarted = Date.now()
+    await journal.page.getByRole('button', { name: 'Lock', exact: true }).click()
+    await expect(
+      journal.page.getByRole('heading', { name: 'InkPrompts Journal is locked' })
+    ).toBeVisible()
+    expect(Date.now() - lockStarted).toBeLessThan(1_000)
+    expect(await journal.page.locator('body').innerText()).not.toContain(
+      'This durable save completes behind PIN Lock.'
+    )
+
+    await pin.fill('654321')
+    await pin.press('Enter')
+    await expect(body).toContainText('This durable save completes behind PIN Lock.')
+    await expect(journal.page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible()
+  } finally {
     await stopJournal(application)
     await removeUserData(userData)
   }
@@ -665,6 +788,9 @@ test('validates an unlocked restore before conditionally releasing its Pending D
     await expect(decision).toBeVisible()
     await chmod(destinationUserData, 0o700)
     await decision.getByRole('button', { name: 'Discard Draft and Continue' }).click()
+    await expect(body).toContainText('The validated backup wins only after replacement succeeds.')
+    await expect(body).not.toContainText('Unlocked pending restore draft')
+    await body.press('ControlOrMeta+z')
     await expect(body).toContainText('The validated backup wins only after replacement succeeds.')
     await expect(body).not.toContainText('Unlocked pending restore draft')
   } finally {

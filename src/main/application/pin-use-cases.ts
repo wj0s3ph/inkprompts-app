@@ -91,9 +91,12 @@ export function createPinUseCases(session: JournalSession): PinUseCases {
     },
 
     async lock() {
-      const state = await session.getSettledState()
-      if (!state.pinLock) return buildView(state, session.clock.today(), 'journal')
       session.lock()
+      const state = await session.getSettledState()
+      if (!state.pinLock) {
+        session.unlock()
+        return buildView(state, session.clock.today(), 'journal')
+      }
       return buildLockView(session.clock.today())
     },
 

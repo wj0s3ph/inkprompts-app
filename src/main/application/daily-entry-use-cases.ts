@@ -84,10 +84,9 @@ export function createDailyEntryUseCases(session: JournalSession): DailyEntryUse
 
       return Object.values(state.entries)
         .filter((entry) => {
-          const searchable = projectForSearch(
-            `${entry.title}\n${richTextToPlainText(entry.content)}`
-          ).value
-          return searchable.includes(normalizedQuery)
+          const title = projectForSearch(entry.title).value
+          const body = projectForSearch(richTextToPlainText(entry.content)).value
+          return title.includes(normalizedQuery) || body.includes(normalizedQuery)
         })
         .sort((left, right) => right.date.localeCompare(left.date))
         .map((entry) => {
@@ -247,8 +246,7 @@ function searchSnippet(value: string, normalizedQuery: string): string {
   if (compact.length <= 160) return compact
 
   const projection = projectForSearch(compact)
-  const queryToken = normalizedQuery.split(' ')[0]
-  const matchIndex = projection.value.indexOf(queryToken)
+  const matchIndex = projection.value.indexOf(normalizedQuery)
   const sourceIndex = matchIndex < 0 ? 0 : projection.starts[matchIndex]
   const start = Math.max(0, sourceIndex - 60)
   const end = Math.min(compact.length, start + 160)
@@ -302,22 +300,19 @@ function findMatchRanges(
   const ranges: Array<{ start: number; end: number }> = []
   const seen = new Set<string>()
 
-  for (const token of normalizedQuery.split(' ')) {
-    if (!token) continue
-    let offset = 0
-    while (offset <= projection.value.length - token.length) {
-      const matchIndex = projection.value.indexOf(token, offset)
-      if (matchIndex < 0) break
-      const start = projection.starts[matchIndex]
-      const projectedEnd = projection.ends[matchIndex + token.length - 1]
-      const end = extendOverCombiningMarks(source, projectedEnd)
-      const key = `${start}:${end}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        ranges.push({ start, end })
-      }
-      offset = matchIndex + token.length
+  let offset = 0
+  while (offset <= projection.value.length - normalizedQuery.length) {
+    const matchIndex = projection.value.indexOf(normalizedQuery, offset)
+    if (matchIndex < 0) break
+    const start = projection.starts[matchIndex]
+    const projectedEnd = projection.ends[matchIndex + normalizedQuery.length - 1]
+    const end = extendOverCombiningMarks(source, projectedEnd)
+    const key = `${start}:${end}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      ranges.push({ start, end })
     }
+    offset = matchIndex + normalizedQuery.length
   }
 
   return ranges

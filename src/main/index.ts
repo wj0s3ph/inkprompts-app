@@ -17,6 +17,8 @@ import {
 import packageMetadata from '../../package.json'
 import { IdleLockCoordinator } from './application/idle-lock-coordinator'
 import type { IdleLockMinutes } from '../shared/journal-contract'
+import type { DurableWriter } from './storage/journal-vault-repository'
+import writeFileAtomic from 'write-file-atomic'
 
 let mainWindow: BrowserWindow | null = null
 let application: JournalApplication | null = null
@@ -81,7 +83,8 @@ async function createWindow(): Promise<void> {
     dataDirectory,
     clock: { now: () => new Date(), today: localDateToday },
     keyProtector: new ElectronKeyProtector(),
-    fileDialogs: new ElectronFileDialogs(window, idleLockCoordinator)
+    fileDialogs: new ElectronFileDialogs(window, idleLockCoordinator),
+    durableWriter: delayedTestWriter()
   })
   removeIpcHandlers?.()
   removeIpcHandlers = registerJournalIpc(application, () => mainWindow, {
@@ -243,4 +246,19 @@ app.on('before-quit', (event) => {
 
 function isTrustedRenderer(sender: Electron.WebContents): boolean {
   return Boolean(mainWindow && !mainWindow.isDestroyed() && sender === mainWindow.webContents)
+}
+
+function delayedTestWriter(): DurableWriter | undefined {
+  const configuredDelay = process.env['INKPROMPTS_DURABLE_WRITE_TEST_MS']
+  if (!configuredDelay) return undefined
+  const delay = Number(configuredDelay)
+  if (!Number.isFinite(delay) || delay <= 0) {
+    throw new Error('INKPROMPTS_DURABLE_WRITE_TEST_MS must be a positive number.')
+  }
+  return {
+    async write(path, data) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delay))
+      await writeFileAtomic(path, data, { encoding: 'utf8', fsync: true, mode: 0o600 })
+    }
+  }
 }

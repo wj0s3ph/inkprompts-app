@@ -93,6 +93,16 @@ export function RichTextEditor({
 
   useEffect(() => {
     if (!editor) return
+    const current = editor.getJSON()
+    if (
+      JSON.stringify({
+        type: 'doc',
+        version: 1,
+        content: current.content ?? []
+      }) === JSON.stringify(content)
+    ) {
+      return
+    }
     editor.commands.setContent(content, { emitUpdate: false })
   }, [content, editor])
 

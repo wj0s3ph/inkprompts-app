@@ -12,12 +12,40 @@ import type {
   PendingDraftResolution,
   ProtectPendingDraft
 } from './pending-draft'
+import { useIdleLockBridge } from './useIdleLockBridge'
 
 type LockSaveStatus = 'idle' | 'pending' | 'saved' | 'failed'
 
 interface DraftDecision extends PendingDraftRequest {
   date: string
   resolve(resolution: PendingDraftResolution): void
+}
+
+interface FocusSnapshot {
+  element: HTMLElement
+  selection: { start: number; end: number } | null
+}
+
+function captureEditingFocus(): FocusSnapshot | null {
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const anchor = window.getSelection()?.anchorNode
+  const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement
+  const selectedEditor = anchorElement?.closest<HTMLElement>('[aria-label="Daily Entry body"]')
+  const element =
+    active?.matches('.journal-title, [aria-label="Daily Entry body"]') === true
+      ? active
+      : selectedEditor
+  if (!element) return null
+  return {
+    element,
+    selection:
+      element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? {
+            start: element.selectionStart ?? element.value.length,
+            end: element.selectionEnd ?? element.value.length
+          }
+        : null
+  }
 }
 
 function App(): React.JSX.Element {
@@ -41,7 +69,37 @@ function App(): React.JSX.Element {
   const pendingDraftRef = useRef(false)
   const lockSaveStatusRef = useRef<LockSaveStatus>('idle')
   const lockSaveRef = useRef<Promise<boolean> | null>(null)
+  const lockFocusRef = useRef<FocusSnapshot | null>(null)
   const draftDecisionRef = useRef<DraftDecision | null>(null)
+
+  useIdleLockBridge(
+    api,
+    view?.access === 'unlocked'
+      ? view.pinEnabled
+        ? view.preferences.idleLockMinutes
+        : null
+      : undefined
+  )
+
+  useEffect(() => {
+    if (view?.access !== 'unlocked' || !pendingDraft) return
+    const frame = window.requestAnimationFrame(() => {
+      const focus = lockFocusRef.current
+      lockFocusRef.current = null
+      const element =
+        focus?.element.isConnected === true
+          ? focus.element
+          : document.querySelector<HTMLElement>('[aria-label="Daily Entry body"]')
+      element?.focus()
+      if (
+        focus?.selection &&
+        (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+      ) {
+        element.setSelectionRange(focus.selection.start, focus.selection.end)
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [pendingDraft, view])
 
   const registerFlush = useCallback((handler: () => Promise<boolean>) => {
     flushRef.current = handler
@@ -152,7 +210,17 @@ function App(): React.JSX.Element {
   )
 
   const beginLockPreparation = useCallback((): void => {
-    if (!workspaceViewRef.current || lockSaveStatusRef.current === 'pending') return
+    const currentWorkspace = workspaceViewRef.current
+    if (!currentWorkspace || lockSaveStatusRef.current === 'pending') return
+    if (currentWorkspace.pinEnabled) {
+      lockFocusRef.current = captureEditingFocus()
+      showView({
+        access: 'locked',
+        screen: 'lock',
+        today: currentWorkspace.today,
+        pinEnabled: true
+      })
+    }
     lockSaveStatusRef.current = 'pending'
     const operation = flushRef.current()
     lockSaveRef.current = operation
@@ -165,7 +233,7 @@ function App(): React.JSX.Element {
       .finally(() => {
         if (lockSaveRef.current === operation) lockSaveRef.current = null
       })
-  }, [releaseWorkspaceBehindLock, setHasPendingDraft])
+  }, [releaseWorkspaceBehindLock, setHasPendingDraft, showView])
 
   const handleLocked = useCallback(
     (nextView: LockedView): void => {
@@ -195,6 +263,7 @@ function App(): React.JSX.Element {
       showView(nextView)
       if (!pendingDraftRef.current) {
         lockSaveStatusRef.current = 'idle'
+        lockFocusRef.current = null
         return
       }
       window.requestAnimationFrame(() => {
@@ -211,6 +280,7 @@ function App(): React.JSX.Element {
     (nextView: UnlockedView): void => {
       lockSaveStatusRef.current = 'idle'
       lockSaveRef.current = null
+      lockFocusRef.current = null
       setHasPendingDraft(false)
       setWorkspaceKey((value) => value + 1)
       showView(nextView)
@@ -250,50 +320,7 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (view?.access !== 'unlocked') return
     document.documentElement.dataset.theme = view.preferences.theme
-    api?.setIdleLock(view.pinEnabled ? view.preferences.idleLockMinutes : null)
-  }, [api, view])
-
-  useEffect(() => {
-    if (!api) return
-    const report = (): void => api.reportActivity()
-    const eventNames = ['click', 'keydown', 'input', 'scroll'] as const
-    for (const eventName of eventNames) document.addEventListener(eventName, report, true)
-
-    const originalConfirm = window.confirm.bind(window)
-    const originalPrompt = window.prompt.bind(window)
-    const originalAlert = window.alert.bind(window)
-    window.confirm = (...args): boolean => {
-      api.pauseIdleLock('native-message')
-      try {
-        return originalConfirm(...args)
-      } finally {
-        api.resumeIdleLock('native-message')
-      }
-    }
-    window.prompt = (...args): string | null => {
-      api.pauseIdleLock('native-message')
-      try {
-        return originalPrompt(...args)
-      } finally {
-        api.resumeIdleLock('native-message')
-      }
-    }
-    window.alert = (...args): void => {
-      api.pauseIdleLock('native-message')
-      try {
-        originalAlert(...args)
-      } finally {
-        api.resumeIdleLock('native-message')
-      }
-    }
-
-    return () => {
-      for (const eventName of eventNames) document.removeEventListener(eventName, report, true)
-      window.confirm = originalConfirm
-      window.prompt = originalPrompt
-      window.alert = originalAlert
-    }
-  }, [api])
+  }, [view])
 
   const startWriting = async (): Promise<void> => {
     if (!api) return

@@ -941,6 +941,37 @@ describe('InkPrompts Journal shell', () => {
         ]
       }
     ])
+
+    await application.saveEntry({
+      date: '2026-08-10',
+      title: 'Quiet morning notes',
+      content: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: `${'Quiet context without the full phrase. '.repeat(8)}A quiet---morning arrived. Quiet context.`
+              }
+            ]
+          }
+        ]
+      }
+    })
+    await expect(application.search('quiet morning')).resolves.toEqual([
+      {
+        date: '2026-08-10',
+        title: 'Quiet morning notes',
+        snippet: expect.stringContaining('A quiet---morning arrived.'),
+        titleMatches: [{ start: 0, end: 13 }],
+        snippetMatches: [
+          expect.objectContaining({ start: expect.any(Number), end: expect.any(Number) })
+        ]
+      }
+    ])
   })
 
   test('Device Snapshots deduplicate daily saves and recover an explicitly deleted entry', async () => {
@@ -1631,6 +1662,11 @@ describe('InkPrompts Journal shell', () => {
     const searchStarted = performance.now()
     await expect(application.search('2018-03-04')).resolves.toMatchObject([{ date: '2018-03-04' }])
     expect(performance.now() - searchStarted).toBeLessThan(750)
+
+    const historyStarted = performance.now()
+    const history = await application.listJournalHistory()
+    expect(history.length).toBeGreaterThan(3_650)
+    expect(performance.now() - historyStarted).toBeLessThan(750)
 
     const saveStarted = performance.now()
     await application.saveEntry({

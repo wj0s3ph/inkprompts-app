@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { firstDayForLocale } from '../calendar-week-start'
 
 interface MonthCalendarProps {
   selectedDate: string
@@ -187,13 +188,4 @@ const weekdayNames = [
 
 function rotateWeekdays(firstDay: 0 | 1): (typeof weekdayNames)[number][] {
   return [...weekdayNames.slice(firstDay), ...weekdayNames.slice(0, firstDay)]
-}
-
-function firstDayForLocale(language: string): 0 | 1 {
-  const locale = new Intl.Locale(language) as Intl.Locale & {
-    weekInfo?: { firstDay: number }
-    getWeekInfo?: () => { firstDay: number }
-  }
-  const firstDay = locale.weekInfo?.firstDay ?? locale.getWeekInfo?.().firstDay
-  return firstDay === 7 ? 0 : 1
 }

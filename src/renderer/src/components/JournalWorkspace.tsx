@@ -78,6 +78,7 @@ export function JournalWorkspace({
   const [celebration, setCelebration] = useState('')
   const [recipeInvitation, setRecipeInvitation] = useState(false)
   const [draft, setDraft] = useState<Draft>(() => draftFromView(view))
+  const [editorSession, setEditorSession] = useState(0)
   const draftRef = useRef(draft)
   const revisionRef = useRef(0)
   const dirtyRef = useRef(false)
@@ -240,6 +241,7 @@ export function JournalWorkspace({
     dirtyRef.current = false
     revisionRef.current += 1
     setDraft(nextDraft)
+    setEditorSession((value) => value + 1)
     setSaveState(nextView.selectedEntry ? 'saved' : 'idle')
     setSaveError('')
   }
@@ -472,7 +474,12 @@ export function JournalWorkspace({
             )}
             <div className="mt-auto space-y-1 pt-6">
               {view.pinEnabled ? (
-                <button className="sidebar-action" type="button" onClick={onRequestLock}>
+                <button
+                  className="sidebar-action"
+                  type="button"
+                  onClick={onRequestLock}
+                  onMouseDown={(event) => event.preventDefault()}
+                >
                   <LockKeyhole aria-hidden="true" size={18} /> Lock
                 </button>
               ) : null}
@@ -567,6 +574,7 @@ export function JournalWorkspace({
                 </label>
                 <div className="editor-surface">
                   <RichTextEditor
+                    key={editorSession}
                     autoFocus={view.editable && !view.selectedEntry}
                     content={draft.content}
                     editable={view.editable}

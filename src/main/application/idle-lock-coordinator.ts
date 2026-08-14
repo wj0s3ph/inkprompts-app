@@ -10,6 +10,7 @@ export interface IdleLockScheduler<Handle> {
 export class IdleLockCoordinator<Handle> {
   private preference: IdleLockMinutes | null = null
   private locked = false
+  private disposed = false
   private timer: Handle | null = null
   private readonly pauses = new Set<string>()
 
@@ -17,7 +18,9 @@ export class IdleLockCoordinator<Handle> {
     private readonly scheduler: IdleLockScheduler<Handle>,
     private readonly onTimeout: () => void | Promise<void>,
     private readonly durationMs: (minutes: Exclude<IdleLockMinutes, 'off'>) => number = (minutes) =>
-      minutes * 60_000
+      minutes * 60_000,
+    private readonly reportFailure: (reason: unknown) => void = (reason) =>
+      console.error('Idle Lock failed.', reason)
   ) {}
 
   setPreference(preference: IdleLockMinutes | null): void {
@@ -51,6 +54,7 @@ export class IdleLockCoordinator<Handle> {
   }
 
   dispose(): void {
+    this.disposed = true
     this.cancelTimer()
     this.pauses.clear()
   }
@@ -58,6 +62,7 @@ export class IdleLockCoordinator<Handle> {
   private restart(): void {
     this.cancelTimer()
     if (
+      this.disposed ||
       this.locked ||
       this.pauses.size > 0 ||
       this.preference === null ||
@@ -68,8 +73,21 @@ export class IdleLockCoordinator<Handle> {
     this.timer = this.scheduler.setTimeout(() => {
       this.timer = null
       this.locked = true
-      void this.onTimeout()
+      try {
+        void Promise.resolve(this.onTimeout()).catch((reason) =>
+          this.recoverFromLockFailure(reason)
+        )
+      } catch (reason) {
+        this.recoverFromLockFailure(reason)
+      }
     }, this.durationMs(this.preference))
+  }
+
+  private recoverFromLockFailure(reason: unknown): void {
+    this.reportFailure(reason)
+    if (this.disposed) return
+    this.locked = false
+    this.restart()
   }
 
   private cancelTimer(): void {

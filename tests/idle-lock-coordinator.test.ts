@@ -96,4 +96,45 @@ describe('Idle Lock coordinator', () => {
     scheduler.advance(24 * 60 * 60_000)
     expect(lock).not.toHaveBeenCalled()
   })
+
+  test('recovers its timer when an asynchronous lock attempt fails', async () => {
+    const scheduler = new TestScheduler()
+    const lock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('lock failed'))
+      .mockResolvedValue(undefined)
+    const coordinator = new IdleLockCoordinator(scheduler, lock, undefined, vi.fn())
+    coordinator.setPreference(5)
+
+    scheduler.advance(5 * 60_000)
+    await Promise.resolve()
+    await Promise.resolve()
+    scheduler.advance(5 * 60_000)
+    expect(lock).toHaveBeenCalledTimes(2)
+  })
+
+  test('reports a late lock failure without rearming after disposal', async () => {
+    const scheduler = new TestScheduler()
+    let rejectLock: (reason: Error) => void = () => undefined
+    const lock = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectLock = reject
+        })
+    )
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const coordinator = new IdleLockCoordinator(scheduler, lock)
+    coordinator.setPreference(5)
+
+    scheduler.advance(5 * 60_000)
+    coordinator.dispose()
+    rejectLock(new Error('late lock failure'))
+    await Promise.resolve()
+    await Promise.resolve()
+    scheduler.advance(5 * 60_000)
+
+    expect(error).toHaveBeenCalledOnce()
+    expect(lock).toHaveBeenCalledOnce()
+    error.mockRestore()
+  })
 })

@@ -143,7 +143,7 @@ export function SettingsDialog({
           run={run}
           view={view}
         />
-        <AboutSettings appInfo={appInfo} openExternalPage={api.openExternalPage} />
+        <AboutSettings version={appInfo.version} />
       </div>
     </dialog>
   )

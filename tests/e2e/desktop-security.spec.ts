@@ -1587,9 +1587,7 @@ test('production renderer is isolated, offline, and restores the last acknowledg
       void dialog.accept()
     })
     await restarted.application.evaluate(
-      ({ dialog, shell }, paths) => {
-        const state = globalThis as typeof globalThis & { inkpromptsOpenedUrls?: string[] }
-        state.inkpromptsOpenedUrls = []
+      ({ dialog }, paths) => {
         dialog.showSaveDialog = (async (...args: unknown[]) => {
           const options = args.at(-1) as { defaultPath?: string }
           return {
@@ -1601,9 +1599,6 @@ test('production renderer is isolated, offline, and restores the last acknowledg
           canceled: false,
           filePaths: [paths.backup]
         })) as typeof dialog.showOpenDialog
-        shell.openExternal = (async (url: string) => {
-          state.inkpromptsOpenedUrls!.push(url)
-        }) as typeof shell.openExternal
       },
       { backup: backupPath, export: exportPath }
     )
@@ -1643,8 +1638,9 @@ test('production renderer is isolated, offline, and restores the last acknowledg
     await settings.click()
     const closeSettings = restarted.page.getByRole('button', { name: 'Close Settings' })
     await expect(closeSettings).toBeFocused()
-    await expect(restarted.page.getByText('InkPrompts Journal 1.0.0')).toBeVisible()
-    await expect(restarted.page.getByText('Private and offline')).toBeVisible()
+    await expect(restarted.page.getByText('Version 1.0.0')).toBeVisible()
+    await expect(restarted.page.getByText('InkPrompts Journal 1.0.0')).toHaveCount(0)
+    await expect(restarted.page.getByText('Private and offline')).toHaveCount(0)
     const theme = restarted.page.getByLabel('Theme')
     await theme.focus()
     await expect(theme).toBeFocused()
@@ -1709,21 +1705,6 @@ test('production renderer is isolated, offline, and restores the last acknowledg
     await expect(
       restarted.page.getByRole('status').filter({ hasText: 'Device Snapshot restored.' })
     ).toBeVisible()
-
-    for (const page of ['Website', 'Privacy', 'Terms', 'Support']) {
-      await restarted.page.getByRole('button', { name: page, exact: true }).click()
-    }
-    expect(
-      await restarted.application.evaluate(() => {
-        const state = globalThis as typeof globalThis & { inkpromptsOpenedUrls?: string[] }
-        return state.inkpromptsOpenedUrls
-      })
-    ).toEqual([
-      'https://inkprompts.com/journal',
-      'https://inkprompts.com/privacy',
-      'https://inkprompts.com/terms',
-      'https://inkprompts.com/contact'
-    ])
 
     const newPin = restarted.page.getByLabel('New 6-digit PIN')
     await newPin.fill('654321')

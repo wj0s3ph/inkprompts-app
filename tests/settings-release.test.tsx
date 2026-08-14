@@ -78,32 +78,20 @@ describe('release Settings', () => {
     await waitFor(() => expect(error).toHaveFocus())
   })
 
-  test('About shows packaged identity, offline status, license, source, and all trusted pages', async () => {
-    const user = userEvent.setup()
-    const openExternalPage = vi.fn(async () => undefined)
+  test('About shows only the packaged version', () => {
     render(
       createElement(AboutSettings, {
-        appInfo: {
-          name: 'InkPrompts Journal',
-          version: '1.0.0',
-          copyright: 'Copyright © 2026 Chao Wang',
-          privacySummary: 'Private and offline',
-          license: 'MPL-2.0',
-          sourceCodeUrl: 'https://github.com/wj0s3ph/inkprompts-app'
-        },
-        openExternalPage
+        version: '1.0.0'
       })
     )
 
     expect(screen.getByRole('heading', { name: 'About' })).toBeInTheDocument()
-    expect(screen.getByText('InkPrompts Journal 1.0.0')).toBeInTheDocument()
-    expect(screen.getByText('Private and offline')).toBeInTheDocument()
-    expect(screen.getByText('Open source under MPL-2.0')).toBeInTheDocument()
-    expect(screen.getByText('https://github.com/wj0s3ph/inkprompts-app')).toBeInTheDocument()
-    for (const page of ['Website', 'Privacy', 'Terms', 'Support'] as const) {
-      await user.click(screen.getByRole('button', { name: page }))
-    }
-    expect(openExternalPage.mock.calls).toEqual([['website'], ['privacy'], ['terms'], ['support']])
+    expect(screen.getByText('Version 1.0.0')).toBeInTheDocument()
+    expect(screen.queryByText('InkPrompts Journal')).not.toBeInTheDocument()
+    expect(screen.queryByText('Private and offline')).not.toBeInTheDocument()
+    expect(screen.queryByText('Open source under MPL-2.0')).not.toBeInTheDocument()
+    expect(screen.queryByText('https://github.com/wj0s3ph/inkprompts-app')).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
   })
 
   test('can explicitly authorize discarding an unsavable draft before erasure', async () => {

@@ -2,7 +2,7 @@
 
 > One honest sentence is enough.
 
-![InkPrompts Journal showing its calendar and focused daily writing editor](.github/assets/inkprompts-journal-showcase.png)
+![InkPrompts Journal showing its calendar and focused daily writing editor](https://raw.githubusercontent.com/wj0s3ph/inkprompts-app/main/.github/assets/inkprompts-journal-showcase.png)
 
 InkPrompts Journal is a calm, private desktop journal for people who want to return to writing without streaks, scores, or pressure. It is the offline writing companion to [InkPrompts.com](https://inkprompts.com/): use the website for beginner-friendly guidance, 230 thoughtful prompts, and printable exercises, then use the app to keep one encrypted Daily Entry for each day.
 
